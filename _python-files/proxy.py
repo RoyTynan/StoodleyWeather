@@ -25,7 +25,7 @@ from rank_bm25 import BM25Okapi
 from config import (
     LLM_URL, CHROMA_DIR, REPO_ROOT, EMBED_URL,
     INDEX_SCRIPT, VENV_PYTHON, N_CONTEXT_CHUNKS,
-    INDEXABLE_EXTENSIONS, EXCLUDED_DIRS,
+    INDEXABLE_EXTENSIONS, EXCLUDED_DIRS, SKELETON_MAX_FILES,
 )
 
 from contextlib import asynccontextmanager
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     print(f"[proxy] repos found: {repos}")
     for repo in repos:
         build_bm25_index(repo)
+        build_skeleton(repo)
     start_file_watcher()
     yield
 
@@ -56,6 +57,18 @@ _reindex_lock = threading.Lock()
 _bm25_indices: dict[str, BM25Okapi] = {}
 _bm25_corpus: dict[str, tuple[list[str], list[dict]]] = {}  # (docs, metas)
 _bm25_lock = threading.Lock()
+
+# Per-repo skeleton maps — rebuilt after every re-index
+_repo_skeletons: dict[str, str] = {}
+_skeleton_lock = threading.Lock()
+
+# Regex patterns for extracting exported symbols from TS/JS files
+_EXPORT_PATTERNS = [
+    re.compile(r'export\s+(?:async\s+)?function\s+(\w+)'),
+    re.compile(r'export\s+const\s+(\w+)\s*[=:(]'),
+    re.compile(r'export\s+(?:type|interface|class|enum)\s+(\w+)'),
+    re.compile(r'export\s+default\s+(?:async\s+)?(?:function|class)\s+(\w+)'),
+]
 
 RRF_K = 60              # RRF constant — higher = smoother rank blending
 CANDIDATE_POOL = N_CONTEXT_CHUNKS * 3  # candidates fetched from each search method
@@ -91,6 +104,41 @@ def build_bm25_index(repo_name: str):
         print(f"[bm25] failed to build index for {repo_name}: {e}")
 
 
+def build_skeleton(repo_name: str):
+    """Build a compact per-repo skeleton: one line per file listing exported symbols."""
+    repo_path = os.path.join(REPO_ROOT, repo_name)
+    lines = []
+    for dirpath, dirnames, filenames in os.walk(repo_path):
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS]
+        for filename in sorted(filenames):
+            ext = os.path.splitext(filename)[1]
+            if ext not in INDEXABLE_EXTENSIONS:
+                continue
+            abs_path = os.path.join(dirpath, filename)
+            rel_path = abs_path.replace(repo_path + "/", "")
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            symbols = []
+            for pattern in _EXPORT_PATTERNS:
+                symbols.extend(pattern.findall(content))
+            if symbols:
+                lines.append(f"{rel_path} → {', '.join(dict.fromkeys(symbols))}")
+            if len(lines) >= SKELETON_MAX_FILES:
+                break
+        if len(lines) >= SKELETON_MAX_FILES:
+            break
+    if not lines:
+        print(f"[skeleton] no symbols found for {repo_name}")
+        return
+    skeleton = "\n".join(lines)
+    with _skeleton_lock:
+        _repo_skeletons[repo_name] = skeleton
+    print(f"[skeleton] built for {repo_name} ({len(lines)} files)")
+
+
 def trigger_reindex(repo_name: str):
     """Run index_repos.py for the given repo, then rebuild the BM25 index."""
     print(f"[watcher] re-indexing {repo_name}...")
@@ -102,6 +150,7 @@ def trigger_reindex(repo_name: str):
     if result.returncode == 0:
         print(f"[watcher] re-index complete for {repo_name}")
         build_bm25_index(repo_name)
+        build_skeleton(repo_name)
     else:
         print(f"[watcher] re-index error for {repo_name}: {result.stderr.strip()}")
 
@@ -274,16 +323,22 @@ def enrich_messages(messages: list) -> list:
 
     chunks = hybrid_search(user_content, repo_name)
 
-    if chunks:
-        print(f"[proxy] injecting {N_CONTEXT_CHUNKS} chunks from {repo_name} for: {user_content[:80]}")
-        enriched_content = (
-            f"Relevant code from the project:\n\n{chunks}\n\n"
-            f"---\n\n{user_content}"
-        )
+    with _skeleton_lock:
+        skeleton = _repo_skeletons.get(repo_name)
+
+    if chunks or skeleton:
+        parts = []
+        if skeleton:
+            parts.append(f"Codebase structure ({repo_name}):\n{skeleton}")
+        if chunks:
+            parts.append(f"Relevant code from the project:\n\n{chunks}")
+        parts.append(user_content)
+        enriched_content = "\n\n---\n\n".join(parts)
+        print(f"[proxy] injecting skeleton={skeleton is not None}, chunks={bool(chunks)} for: {user_content[:80]}")
         messages = list(messages)
         messages[last_user_idx] = {**messages[last_user_idx], "content": enriched_content}
     else:
-        print(f"[proxy] no chunks found in {repo_name} for: {user_content[:80]}")
+        print(f"[proxy] no context found in {repo_name} for: {user_content[:80]}")
 
     return messages
 

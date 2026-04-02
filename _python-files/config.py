@@ -38,6 +38,10 @@ LLM_URL = "http://192.168.178.99:8080"
 # Number of ChromaDB chunks to inject into each enriched prompt
 N_CONTEXT_CHUNKS = 5
 
+# Maximum number of files to include in the skeleton codebase map
+# Keeps the preamble compact on larger repos
+SKELETON_MAX_FILES = 60
+
 # Derived — do not edit
 INDEX_SCRIPT = os.path.join(TOOLS_DIR, "index_repos.py")
 VENV_PYTHON = os.path.join(TOOLS_DIR, ".venv/bin/python")
