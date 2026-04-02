@@ -12,6 +12,8 @@ NEVER include any of the following:
 
 After completing a task, respond with ONE short confirmation line only. Example: "Done — added `mpsToBeaufort` to `weather-utils.ts`." Then stop.
 
+For read or search tasks (no file edits), answer the question in one or two sentences then call `attempt_completion` once with the answer as the result. Do NOT call `attempt_completion` more than once.
+
 ## Editing Files
 - Do NOT edit any file unless the user explicitly uses the word "edit", "change", "fix", or "update".
 - A search or lookup result is never a reason to edit a file.

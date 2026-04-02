@@ -88,9 +88,17 @@ These settings reduce prompt complexity and improve reliability with the local L
 Every request Cline sends is intercepted. The proxy:
 
 1. Scans the conversation history to detect which repo is being worked on
-2. Embeds the user's prompt into a vector using the RTX 2060
-3. Queries ChromaDB for the 5 most relevant code chunks from that repo
-4. Injects them into the prompt before forwarding to the i9
+2. Runs a **hybrid search** to find the most relevant code chunks from that repo
+3. Injects them into the prompt before forwarding to the i9
+
+**Hybrid search** combines two retrieval methods, then merges the results using **Reciprocal Rank Fusion (RRF)**:
+
+- **Vector search** — embeds the prompt using the RTX 2060 and queries ChromaDB for semantically similar chunks
+- **BM25 keyword search** — scores all chunks in an in-memory BM25 index (built at proxy startup from the ChromaDB corpus) using TF-IDF-style keyword matching
+
+Each method produces a ranked list of candidates. RRF combines the two ranked lists into a single ranking without needing to normalise scores — chunks that rank well in both searches score highest. The top `N_CONTEXT_CHUNKS` results are injected into the prompt.
+
+Using both methods together is more robust than vector search alone: vector search finds conceptually related code even when the wording differs; BM25 reliably surfaces exact function names, variable names, and identifiers that semantic search can miss.
 
 **Exception:** if the prompt already contains a file path (`src/`), enrichment is skipped — Cline reads the file directly via the MCP server instead. This avoids format mismatches that would cause Cline's SEARCH/REPLACE edits to fail.
 

@@ -22,6 +22,10 @@ export function degreesToCompass(degrees: number): string {
   return DIRECTIONS[Math.round(degrees / 45) % 8];
 }
 
+export function testagain(a: number, b: number): number {
+  return a + b;
+}
+
 export function getSummitConditions(hourlyWeatherPoint: HourlyWeatherPoint): { score: number, label: string, colour: string } {
   let score = 100;
 
@@ -61,3 +65,4 @@ export function visibilityToDescription(visibilityMeters: number): string {
   if (visibilityMeters >= 200) return "Moderate";
   return "Poor";
 }
+

@@ -11,6 +11,7 @@ Configure the addresses and paths below to match your setup.
 """
 
 import os
+import re
 import subprocess
 import threading
 import httpx
@@ -20,13 +21,25 @@ import chromadb
 from chromadb.config import Settings
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from rank_bm25 import BM25Okapi
 from config import (
     LLM_URL, CHROMA_DIR, REPO_ROOT, EMBED_URL,
     INDEX_SCRIPT, VENV_PYTHON, N_CONTEXT_CHUNKS,
     INDEXABLE_EXTENSIONS, EXCLUDED_DIRS,
 )
 
-app = FastAPI()
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    repos = get_repos()
+    print(f"[proxy] repos found: {repos}")
+    for repo in repos:
+        build_bm25_index(repo)
+    start_file_watcher()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 _chroma_client = chromadb.PersistentClient(
     path=CHROMA_DIR,
@@ -38,6 +51,14 @@ _http_client = httpx.Client(timeout=120.0)
 # Per-repo debounce timers
 _reindex_timers: dict[str, threading.Timer] = {}
 _reindex_lock = threading.Lock()
+
+# Per-repo BM25 indices — rebuilt after every re-index
+_bm25_indices: dict[str, BM25Okapi] = {}
+_bm25_corpus: dict[str, tuple[list[str], list[dict]]] = {}  # (docs, metas)
+_bm25_lock = threading.Lock()
+
+RRF_K = 60              # RRF constant — higher = smoother rank blending
+CANDIDATE_POOL = N_CONTEXT_CHUNKS * 3  # candidates fetched from each search method
 
 
 def get_repos() -> list[str]:
@@ -51,8 +72,27 @@ def get_repos() -> list[str]:
         return []
 
 
+def build_bm25_index(repo_name: str):
+    """Build in-memory BM25 index from all chunks stored in ChromaDB for a repo."""
+    try:
+        collection = _chroma_client.get_collection(f"repo_{repo_name}")
+        results = collection.get()
+        docs = results["documents"]
+        metas = results["metadatas"]
+        if not docs:
+            print(f"[bm25] no documents for {repo_name}")
+            return
+        tokenized = [doc.lower().split() for doc in docs]
+        with _bm25_lock:
+            _bm25_indices[repo_name] = BM25Okapi(tokenized)
+            _bm25_corpus[repo_name] = (docs, metas)
+        print(f"[bm25] index built for {repo_name} ({len(docs)} chunks)")
+    except Exception as e:
+        print(f"[bm25] failed to build index for {repo_name}: {e}")
+
+
 def trigger_reindex(repo_name: str):
-    """Run index_repos.py for the given repo."""
+    """Run index_repos.py for the given repo, then rebuild the BM25 index."""
     print(f"[watcher] re-indexing {repo_name}...")
     result = subprocess.run(
         [VENV_PYTHON, INDEX_SCRIPT, "--repo", repo_name],
@@ -61,6 +101,7 @@ def trigger_reindex(repo_name: str):
     )
     if result.returncode == 0:
         print(f"[watcher] re-index complete for {repo_name}")
+        build_bm25_index(repo_name)
     else:
         print(f"[watcher] re-index error for {repo_name}: {result.stderr.strip()}")
 
@@ -139,22 +180,57 @@ def detect_repo(messages: list) -> str | None:
     return None
 
 
-def fetch_relevant_chunks(query: str, repo_name: str) -> str:
+def hybrid_search(query: str, repo_name: str) -> str:
+    """Hybrid search combining ChromaDB vector search and BM25 keyword search via RRF."""
+
+    # --- Vector search — semantic similarity ---
+    vector_results: list[tuple[str, dict]] = []
     try:
         collection = _chroma_client.get_collection(f"repo_{repo_name}")
         vector = get_embedding(query)
-        results = collection.query(query_embeddings=[vector], n_results=N_CONTEXT_CHUNKS)
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        if not docs:
-            return ""
-        parts = []
-        for doc, meta in zip(docs, metas):
-            print(f"[proxy] chunk: {meta['file_path']} lines {meta['start_line']}–{meta['end_line']}")
-            parts.append(f"// {meta['file_path']} (lines {meta['start_line']}–{meta['end_line']})\n{doc.strip()}")
-        return "\n\n".join(parts)
+        results = collection.query(query_embeddings=[vector], n_results=CANDIDATE_POOL)
+        vector_results = list(zip(results["documents"][0], results["metadatas"][0]))
     except Exception:
+        pass
+
+    # --- BM25 search — exact keyword matching ---
+    bm25_results: list[tuple[str, dict]] = []
+    with _bm25_lock:
+        index = _bm25_indices.get(repo_name)
+        corpus = _bm25_corpus.get(repo_name)
+    if index is not None and corpus is not None:
+        all_docs, all_metas = corpus
+        scores = index.get_scores(query.lower().split())
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:CANDIDATE_POOL]
+        bm25_results = [(all_docs[i], all_metas[i]) for i in top_indices if scores[i] > 0]
+
+    if not vector_results and not bm25_results:
         return ""
+
+    # --- Reciprocal Rank Fusion ---
+    rrf_scores: dict[tuple, float] = {}
+    chunk_map: dict[tuple, tuple[str, dict]] = {}
+
+    for rank, (doc, meta) in enumerate(vector_results):
+        key = (meta["file_path"], meta["start_line"])
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
+        chunk_map[key] = (doc, meta)
+
+    for rank, (doc, meta) in enumerate(bm25_results):
+        key = (meta["file_path"], meta["start_line"])
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
+        chunk_map[key] = (doc, meta)
+
+    top_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)[:N_CONTEXT_CHUNKS]
+
+    parts = []
+    for key in top_keys:
+        doc, meta = chunk_map[key]
+        score = round(rrf_scores[key], 4)
+        print(f"[proxy] chunk: {meta['file_path']} lines {meta['start_line']}–{meta['end_line']} (rrf={score})")
+        parts.append(f"// {meta['file_path']} (lines {meta['start_line']}–{meta['end_line']})\n{doc.strip()}")
+
+    return "\n\n".join(parts)
 
 
 def enrich_messages(messages: list) -> list:
@@ -172,11 +248,23 @@ def enrich_messages(messages: list) -> list:
         return messages
 
     user_content = messages[last_user_idx].get("content", "")
+    if isinstance(user_content, list):
+        user_content = " ".join(
+            part.get("text", "") for part in user_content if isinstance(part, dict)
+        )
 
-    # Skip enrichment if prompt references a specific file path —
+    # Skip enrichment if the user's prompt references a specific file path —
     # Cline will read the file directly via MCP, avoiding format mismatch.
-    if "src/" in user_content:
-        print("[proxy] skipping enrichment — specific file path detected in prompt")
+    # Match src/ followed by a filename-like pattern to avoid false positives.
+    # Skip enrichment for Cline internal messages — tool results, errors, retries.
+    # These start with [ and are not user prompts.
+    if user_content.lstrip().startswith("["):
+        print("[proxy] skipping enrichment — Cline internal message")
+        return messages
+
+    match = re.search(r'\b(?:read|edit|update|fix|change|look at|in)\s+src/[\w./\-]+\.\w+', user_content, re.IGNORECASE)
+    if match:
+        print(f"[proxy] skipping enrichment — explicit file reference: {match.group()}")
         return messages
 
     repo_name = detect_repo(messages)
@@ -184,7 +272,7 @@ def enrich_messages(messages: list) -> list:
         print("[proxy] no repo detected in conversation, skipping enrichment")
         return messages
 
-    chunks = fetch_relevant_chunks(user_content, repo_name)
+    chunks = hybrid_search(user_content, repo_name)
 
     if chunks:
         print(f"[proxy] injecting {N_CONTEXT_CHUNKS} chunks from {repo_name} for: {user_content[:80]}")
@@ -200,11 +288,6 @@ def enrich_messages(messages: list) -> list:
     return messages
 
 
-@app.on_event("startup")
-async def startup():
-    repos = get_repos()
-    print(f"[proxy] repos found: {repos}")
-    start_file_watcher()
 
 
 @app.post("/v1/chat/completions")

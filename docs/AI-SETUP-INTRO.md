@@ -52,8 +52,15 @@ Cline executes prompts against the local LLM.
 A FastAPI server (`proxy.py`) runs on the i7 between Cline and the LLM. Every request Cline sends is intercepted. The proxy:
 
 1. Detects which repo is being worked on from the conversation history
-2. Embeds the prompt and queries ChromaDB for the 5 most relevant code chunks
+2. Runs a **hybrid search** to find the most relevant code chunks from that repo
 3. Injects them into the prompt before forwarding to the i9
+
+**Hybrid search** combines two methods and merges the results using Reciprocal Rank Fusion (RRF):
+
+- **Vector search** — embeds the prompt and queries ChromaDB for semantically similar chunks
+- **BM25 keyword search** — scores all chunks using TF-IDF-style keyword matching against an in-memory index built at startup
+
+Using both methods together is more reliable than either alone — vector search finds conceptually related code, BM25 finds exact function names and identifiers.
 
 This gives the local LLM relevant codebase context on every request automatically.
 
