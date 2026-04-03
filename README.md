@@ -2,6 +2,20 @@
 
 A simple Next.js weather app for Stoodley Pike, near Todmorden in West Yorkshire.
 
+# Just to clarify any confusion
+
+This repo is about setting up and configuring an LLM (Large Language Model) locally on a home network.
+
+The whole point of this repo is described via the documents found at the bottom of this page.
+
+It is about setting up and running llama server, specifically llama.cpp, to act as a software coding assistant along the lines of Claude Code.
+
+The app that's presented and gives the name to the repo, StoodleyWeather, is a test Next.js app that allows a user to test the coding assistant against a real-world application.
+
+As just mentioned, the real purpose of this repo is detailed in the documents given at the bottom of this page.
+
+
+# Introduction
 
 Hello, my name is Roy Tynan. I live in West Yorkshire, England. I'm an electronics engineer / software engineer with quite a number of years ( too many ) development experience.
 
