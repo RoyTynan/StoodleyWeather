@@ -4,7 +4,7 @@ A simple Next.js weather app for Stoodley Pike, near Todmorden in West Yorkshire
 
 # Just to clarify any confusion
 
-This repo is about setting up and configuring an LLM (Large Language Model) locally on a home network.
+This repo is about setting up and configuring an LLM (Large Language Model) locally on a home network or a single machine.
 
 The whole point of this repo is described via the documents found at the bottom of this page.
 
