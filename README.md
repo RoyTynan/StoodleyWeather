@@ -8,7 +8,7 @@ This repo is about setting up and configuring an LLM (Large Language Model) loca
 
 The whole point of this repo is described via the documents found at the bottom of this page.
 
-It is about setting up and running llama server, specifically llama.cpp, to act as a software coding assistant along the lines of Claude Code.
+It is about setting up and running llama server, specifically llama.cpp, to act as a software coding assistant along the likes of Claude Code.
 
 The app that's presented and gives the name to the repo, StoodleyWeather, is a test Next.js app that allows a user to test the coding assistant against a real-world application.
 
