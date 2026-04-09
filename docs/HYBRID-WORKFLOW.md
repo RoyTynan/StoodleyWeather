@@ -193,7 +193,7 @@ Reviewing Cline's output in Claude is one of the most useful habits to develop. 
 
 ---
 
-## Why This Works
+## Why This Hybrid Workflow Works
 
 ### Gemini's strengths
 
