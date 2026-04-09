@@ -138,6 +138,55 @@ Download with wget as described in [AI-SETUP.md](AI-SETUP.md#3-downloads-require
 
 ---
 
+## No GPU — CPU-Only with Conventional RAM
+
+If you do not have a discrete GPU, llama.cpp can run entirely on CPU using system RAM. Performance is significantly slower — expect 2–8 tokens per second depending on your CPU and model size — but for a proxy-assisted workflow where Cline submits one focused task at a time, this is often acceptable. You are not waiting for interactive streaming; you submit a prompt and come back.
+
+The key difference from VRAM is that RAM is cheap and plentiful. A machine with 32GB or 64GB of RAM can run models that no consumer GPU can fit.
+
+### Recommended models for CPU-only use
+
+Prioritise **small, well-quantised models** that generate tokens quickly rather than large models that fit but crawl. Q4_K_M is the right default — it gives a good quality-to-size ratio and keeps generation fast.
+
+| Model | Quantisation | Approx size | Min RAM | Notes |
+|---|---|---|---|---|
+| Qwen2.5-Coder-7B-Instruct | Q4_K_M | ~4.1GB | 8GB | Fast on CPU — good first choice |
+| Qwen2.5-Coder-7B-Instruct | Q8_0 | ~7.2GB | 12GB | Near-full quality, still manageable |
+| Qwen2.5-Coder-14B-Instruct | Q4_K_M | ~8.1GB | 16GB | Noticeably better reasoning than 7B |
+| Qwen2.5-Coder-14B-Instruct | Q6_K | ~10.5GB | 16GB | Better quality, still CPU-viable |
+| Phi-4-mini-instruct | Q4_K_M | ~2.5GB | 6GB | Microsoft's 3.8B model — punches above its size |
+| SmolLM2-1.7B-Instruct | Q8_0 | ~1.8GB | 4GB | Extremely fast, limited reasoning — for simple edits only |
+
+### CPU performance tips
+
+**Use `-ngl 0` in llama.cpp** to disable GPU offloading entirely — this avoids llama.cpp attempting partial GPU offload and failing silently on machines without compatible drivers.
+
+**Reduce threads to match physical cores, not logical.** Hyperthreading does not help LLM inference. Set `-t` to the number of physical cores. On a 6-core/12-thread CPU, use `-t 6`.
+
+**Reduce context window to 16K or 32K.** The KV cache lives in RAM on CPU runs and grows linearly with context size. A 65K context on a 14B model can consume 8–12GB of RAM on top of the model weights. Reduce `--ctx-size` in `start-llm.sh` if RAM is tight.
+
+**Use `--mmap` (enabled by default in llama.cpp).** Memory-mapped model loading means the OS can page model weights in and out. On machines with enough RAM to hold the full model this makes no difference, but on tighter setups it prevents out-of-memory crashes at the cost of slightly slower first-token latency.
+
+### Example `start-llm.sh` flags for CPU-only
+
+```bash
+./llama-server \
+  --model models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --ctx-size 32768 \
+  --threads 6 \
+  --ngl 0 \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+### Does the proxy still work?
+
+Yes — identically. llama.cpp's `/v1/chat/completions` endpoint is the same whether the model runs on GPU or CPU. The proxy, MCP server, ChromaDB enrichment, and Cline integration are all unaffected. The only thing that changes is generation speed.
+
+For the hybrid workflow (Gemini → Claude Code → Cline), slower generation is less of a problem than it sounds. Cline submits one focused, proxy-enriched prompt at a time. A 7B model generating at 5 tok/s will complete a typical code edit in 30–60 seconds — slow compared to a GPU, but not a blocker for a workflow that already involves human review between every step.
+
+---
+
 ## Does a Smaller Model Change the Setup?
 
 No. The proxy, MCP server, clinerules, and workflow are identical regardless of which model you run. The only changes are:
