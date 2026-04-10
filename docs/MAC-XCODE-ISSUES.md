@@ -31,6 +31,25 @@ VS Code / Cline (Mac)
 
 ---
 
+## Project Repo Location
+
+The React Native repo must live on the Mac — Xcode and the iOS/Android simulators require local access to the source. The proxy indexes whatever is under `REPO_ROOT`, which in `config.py` is set to:
+
+```
+/Users/yourname/dev/v4
+```
+
+Place the repo directly under that directory:
+
+```
+~/dev/v4/
+└── v4visuals/        ←  React Native project here
+```
+
+If you use a different root path, update `REPO_ROOT` in `config.py` to match before running the indexer.
+
+---
+
 ## MCP Tools
 
 Location: `~/dev/mcp-tools/`
