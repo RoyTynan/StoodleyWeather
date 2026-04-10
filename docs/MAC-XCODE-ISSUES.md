@@ -41,7 +41,8 @@ The Mac-specific versions of all Python scripts are in [_python-files-xcode/](..
 |---|---|
 | [`config.py`](../_python-files-xcode/config.py) | All paths and endpoints. Edit here if anything moves. **See note below.** |
 | [`proxy.py`](../_python-files-xcode/proxy.py) | FastAPI proxy on port 8000. Intercepts Cline's LLM requests, injects RAG context (hybrid BM25 + vector search via RRF), forwards to i9. |
-| [`server.py`](../_python-files-xcode/server.py) | stdio MCP server. Provides `semantic_search`, `read_repo_file`, `list_repos`, `search_official_docs` tools to Cline. |
+| [`server.py`](../_python-files-xcode/server.py) | stdio MCP server. Provides `semantic_search`, `read_repo_file`, `list_repos`, `search_official_docs`, `verify_project` tools to Cline. |
+| [`verify.py`](../_python-files-xcode/verify.py) | Stack auto-detection and check runner used by `verify_project`. |
 | [`index_repos.py`](../_python-files-xcode/index_repos.py) | Indexes source repos into local ChromaDB. Run manually after large changes. |
 | [`index_docs.py`](../_python-files-xcode/index_docs.py) | Indexes documentation libraries into ChromaDB. |
 | [`docs_server.py`](../_python-files-xcode/docs_server.py) | stdio MCP server for documentation search. |
