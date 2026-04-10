@@ -143,6 +143,35 @@ Cline reads the file via the MCP server, writes a targeted edit, and confirms. T
 
 ---
 
+## Automated Verification
+
+After Cline makes a code change, you can ask it to verify the result immediately using the `verify_project` MCP tool. This runs the appropriate checks for the project's tech stack automatically — no configuration needed.
+
+```
+After making the changes, call verify_project for stoodleyweather and report the results
+```
+
+What it runs, detected from the repo:
+
+| Stack | Check |
+|---|---|
+| TypeScript | `tsc --noEmit` |
+| React | `tsc --noEmit` + ESLint (if configured) |
+| React Native | `tsc --noEmit` + ESLint (if configured) |
+| C++ (CMake) | `cmake --build build/` |
+| C++ (Make) | `make -j4` |
+
+If the check fails, Cline receives the compiler or linter output and can fix the errors before considering the task done. This replaces the manual step of bringing Cline's output back to Claude Code for review on straightforward tasks — though Claude Code review is still worthwhile for anything architectural.
+
+A typical prompt combining both:
+
+```
+Read src/lib/weather-utils.ts in stoodleyweather, add a windChill function,
+then call verify_project to confirm there are no type errors.
+```
+
+---
+
 ## Recognising the Switch Point
 
 The workflow is not always a clean linear hand-off. In practice you move back and forth between the two tools throughout a session. The question to ask is:

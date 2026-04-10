@@ -6,6 +6,7 @@ from chromadb.config import Settings
 from mcp.server.fastmcp import FastMCP
 from functools import lru_cache
 from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, REACT_DOCS
+from verify import verify
 
 mcp = FastMCP("Context Engine")
 
@@ -116,6 +117,24 @@ def semantic_search(query: str, repo_name: str, n_results: int = 3, task_progres
             f"---\n{doc.strip()}"
         )
     return "\n\n".join(output)
+
+
+@mcp.tool()
+def verify_project(repo_name: str, task_progress: str = "") -> str:
+    """
+    Auto-detects the project type and runs appropriate verification checks.
+    Supports TypeScript, React, React Native, and C++ (CMake/Make).
+    Call this after making code changes to confirm they are correct before finishing.
+    Returns pass/fail status and any compiler or linter errors.
+    """
+    repo_path = os.path.join(REPO_ROOT, repo_name)
+    if not os.path.isdir(repo_path):
+        return f"Error: repo '{repo_name}' not found under {REPO_ROOT}."
+    try:
+        result = verify(repo_path, repo_name)
+        return result.summary()
+    except Exception as e:
+        return f"Verification error: {e}"
 
 
 if __name__ == "__main__":

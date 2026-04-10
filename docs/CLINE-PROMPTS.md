@@ -72,6 +72,27 @@ Create src/components/PressureTrend.tsx — accepts data: HourlyWeatherPoint[] a
 
 ---
 
+## Verification
+
+Run after any code change to check for type errors, lint violations, or build failures. The tool auto-detects the project type — no arguments beyond the repo name needed.
+
+```
+Call verify_project for stoodleyweather and report the results
+```
+
+*Combined with an edit — verify immediately after the change:*
+```
+Read src/lib/weather-utils.ts in stoodleyweather, add a windChill(tempC: number, windSpeedKph: number): number function, then call verify_project to confirm there are no type errors
+```
+```
+Read src/components/WeatherTable.tsx in stoodleyweather, fix the missing import for HourlyWeatherPoint, then call verify_project to confirm it passes
+```
+```
+Create src/components/PressureTrend.tsx as described, then call verify_project for stoodleyweather before finishing
+```
+
+---
+
 ## Debugging
 
 ```

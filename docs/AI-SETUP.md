@@ -319,8 +319,9 @@ The folder contains:
 |---|---|
 | `config.py` | All configuration constants — edit this to match your machine |
 | `proxy.py` | LLM proxy — context enrichment, file watcher |
-| `server.py` | MCP context-engine server |
+| `server.py` | MCP context-engine server — includes `verify_project` tool |
 | `docs_server.py` | MCP docs-engine server |
+| `verify.py` | Stack auto-detection and check runner used by `verify_project` |
 | `index_repos.py` | Repo indexer |
 | `index_docs.py` | Documentation indexer |
 | `start-services.sh` | Post-reboot health check |

@@ -115,6 +115,7 @@ src/
 
 | File | Description |
 |---|---|
+| [docs/NEW-PROJECT.md](docs/NEW-PROJECT.md) | Step-by-step checklist for adding a new project — clinerules, indexing, verification |
 | [docs/AI-SETUP-INTRO.md](docs/AI-SETUP-INTRO.md) | Quick summary of the AI setup — workflow, proxy, ChromaDB, and Cline configuration |
 | [docs/AI-SETUP.md](docs/AI-SETUP.md) | Full walkthrough of the local LLM hardware setup, MCP servers, ChromaDB indexing, and Cline configuration |
 | [docs/HYBRID-WORKFLOW.md](docs/HYBRID-WORKFLOW.md) | How to use Claude Code for reasoning and planning, and Cline for execution |
