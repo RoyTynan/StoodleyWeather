@@ -12,7 +12,7 @@ As a result, all development tooling that previously ran on i7 has been moved to
 
 - **Mac Mini M2** — 32GB unified memory. Runs VS Code, Xcode, Cloudflare tunnel, Expo, Ollama, ChromaDB, MCP proxy and server.
 - **i9 Ubuntu (192.168.178.99)** — LLM inference only. Runs Qwen2.5-Coder-32B-Instruct Q8_0 via llama-server on port 8080.
-- **i7 Ubuntu (192.168.178.35)** — Unchanged. Runs stoodleyweather dev server, its own MCP tools, ChromaDB, and embedding server. No longer in the loop for Mac development.
+- **i7 Ubuntu (192.168.178.35)** — Runs MCP tools, ChromaDB, and embedding server. Receives synced copies of the Mac repo and keeps the RAG index up to date via its file watcher.
 
 ---
 
@@ -31,9 +31,49 @@ VS Code / Cline (Mac)
 
 ---
 
-## Project Repo Location
+## Project Repo Location — Dual Copy with File Sync
 
-The React Native repo must live on the Mac — Xcode and the iOS/Android simulators require local access to the source. The proxy indexes whatever is under `REPO_ROOT`, which in `config.py` is set to:
+The React Native repo must live on the Mac — Xcode and the iOS/Android simulators require local access to the source. But the RAG indexing system (ChromaDB, the file watcher, the embedding server) runs on the i7 Ubuntu server, which is where the full AI setup lives.
+
+To bridge this, the project runs as **two synchronised copies**:
+
+```
+Mac Mini                          i7 Ubuntu
+~/dev/v4/v4visuals/    ←sync→    /home/roy/mcp-context/repos/v4visuals/
+  (edit here, run Expo/Xcode)       (indexed here, RAG always up to date)
+```
+
+A local file watcher on the Mac monitors the repo for changes and syncs modified files to the i7 automatically. This means:
+
+- You code and run the app entirely on the Mac
+- The i7's file watcher detects the incoming changes, triggers a re-index, and keeps ChromaDB current
+- Every Cline request is enriched with up-to-date RAG context from the i7, even though the code lives on the Mac
+
+### Why not index on the Mac?
+
+The Mac setup does have a local ChromaDB (used as a fallback), but the i7 is the preferred indexing target because:
+
+- It runs the embedding server (`nomic-embed-text` via llama.cpp) at full speed on the RTX 2060
+- It keeps the Mac free of indexing load during development
+- The i7's MCP tools and proxy are already configured and battle-tested
+
+### Mac-side proxy REPO_ROOT
+
+The local `config.py` on the Mac still points `REPO_ROOT` at the Mac copy:
+
+```
+/Users/yourname/dev/v4
+```
+
+This is used by the Mac proxy for any local context injection fallback. The i7 proxy uses its own `REPO_ROOT` pointing at the synced copy on Ubuntu.
+
+---
+
+## Project Repo Location — Mac Only (original approach)
+
+Before the dual-copy sync approach was adopted, the repo lived only on the Mac and was indexed locally. This section is retained as a reference for a simpler single-machine setup.
+
+The proxy indexes whatever is under `REPO_ROOT`, which in `config.py` is set to:
 
 ```
 /Users/yourname/dev/v4
@@ -43,10 +83,16 @@ Place the repo directly under that directory:
 
 ```
 ~/dev/v4/
-└── v4visuals/        ←  React Native project here
+└── v4visuals/        ← React Native project here
 ```
 
-If you use a different root path, update `REPO_ROOT` in `config.py` to match before running the indexer.
+ChromaDB runs locally on the Mac (`~/dev/mcp-tools/chromadb_data/`) and is populated by running the indexer manually after significant changes:
+
+```bash
+cd ~/dev/mcp-tools && .venv/bin/python index_repos.py --repo v4visuals
+```
+
+If you use a different root path, update `REPO_ROOT` in `config.py` to match before running the indexer. This approach works well on a single machine but means the i7's RAG system has no knowledge of the Mac repo.
 
 ---
 
