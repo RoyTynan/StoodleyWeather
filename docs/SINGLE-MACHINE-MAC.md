@@ -94,8 +94,8 @@ wget --header="Authorization: Bearer your-huggingface-token" \
 python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='nomic-ai/nomic-embed-text-v1.5-GGUF',
-    filename='nomic-embed-text-v1.5.Q4_K_M.gguf',
+    repo_id='BAAI/bge-m3-GGUF',
+    filename='bge-m3-Q8_0.gguf',
     local_dir='$HOME/models/'
 )"
 ```
@@ -151,7 +151,7 @@ pkill -f "llama-server.*11435"
 sleep 1
 
 $HOME/llama.cpp/build/bin/llama-server \
-  --model $HOME/models/nomic-embed-text-v1.5.Q4_K_M.gguf \
+  --model $HOME/models/bge-m3-Q8_0.gguf \
   --port 11435 \
   --host 127.0.0.1 \
   --ctx-size 8192 \

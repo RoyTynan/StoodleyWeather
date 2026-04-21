@@ -105,8 +105,8 @@ curl -L -H "Authorization: Bearer your-huggingface-token" `
 python -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='nomic-ai/nomic-embed-text-v1.5-GGUF',
-    filename='nomic-embed-text-v1.5.Q4_K_M.gguf',
+    repo_id='BAAI/bge-m3-GGUF',
+    filename='bge-m3-Q8_0.gguf',
     local_dir='C:/models/'
 )"
 ```
@@ -148,7 +148,7 @@ Create `C:\llama\start-embed.bat`:
 ```bat
 @echo off
 set SERVER_BIN=C:\llama.cpp\build\bin\Release\llama-server.exe
-set MODEL_PATH=C:\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+set MODEL_PATH=C:\models\bge-m3-Q8_0.gguf
 
 %SERVER_BIN% ^
   --model %MODEL_PATH% ^

@@ -26,5 +26,22 @@ else
     exit 1
 fi
 
+# Proxy (context enrichment, reranker, auto-verify)
+if curl -s --max-time 3 http://127.0.0.1:8000/v1/models > /dev/null 2>&1; then
+    echo "[OK] Proxy already running on port 8000"
+else
+    echo "[..] Starting proxy..."
+    nohup /mnt/storage/mcp-tools/.venv/bin/python /mnt/storage/mcp-tools/proxy.py \
+        > /tmp/proxy.log 2>&1 &
+    sleep 3
+    if curl -s --max-time 3 http://127.0.0.1:8000/v1/models > /dev/null 2>&1; then
+        echo "[OK] Proxy started on port 8000"
+    else
+        echo "[FAIL] Proxy failed to start — check /tmp/proxy.log"
+        exit 1
+    fi
+fi
+
 echo ""
 echo "All services ready. Open VS Code — Cline will handle the rest."
+echo "Proxy log: /tmp/proxy.log"

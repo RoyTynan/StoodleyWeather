@@ -5,7 +5,7 @@ import chromadb
 from chromadb.config import Settings
 from mcp.server.fastmcp import FastMCP
 from functools import lru_cache
-from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, REACT_DOCS
+from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_QUERY_PREFIX, REACT_DOCS
 from verify import verify
 
 mcp = FastMCP("Context Engine")
@@ -23,7 +23,7 @@ def _get_embedding(query: str) -> list:
     """Embed a query string, cached by query text."""
     response = _http_client.post(
         EMBED_URL,
-        json={"model": "nomic-embed-text", "input": f"search_query: {query}"},
+        json={"model": "bge-m3", "input": f"{EMBED_QUERY_PREFIX}{query}"},
     )
     response.raise_for_status()
     return response.json()["data"][0]["embedding"]

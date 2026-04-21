@@ -13,7 +13,7 @@ import httpx
 import chromadb
 from chromadb.config import Settings
 from config import (
-    CHROMA_DIR, EMBED_URL, DOCS_SOURCES,
+    CHROMA_DIR, EMBED_URL, EMBED_PASSAGE_PREFIX, DOCS_SOURCES,
     DOCS_EXTENSIONS, DOCS_EXCLUDED_DIRS as EXCLUDED_DIRS,
     DOCS_CHUNK_CHARS as CHUNK_CHARS, DOCS_CHUNK_OVERLAP as CHUNK_OVERLAP,
     DOCS_MANIFEST_PATH as MANIFEST_PATH,
@@ -84,23 +84,19 @@ def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=CHUNK_OVERLAP):
 
 
 def embed_texts(texts):
-    """Embed a list of texts via Ollama (one request per text)."""
-    embeddings = []
-    for text in texts:
-        try:
-            response = httpx.post(
-                EMBED_URL,
-                json={"model": "nomic-embed-text", "prompt": "search_document: " + text},
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            embeddings.append(response.json()["embedding"])
-        except httpx.ConnectError:
-            print("ERROR: Ollama not reachable at 11434. Run: brew services start ollama", file=sys.stderr)
-            sys.exit(1)
-        except Exception:
-            embeddings.append(None)
-    return embeddings
+    prefixed = [EMBED_PASSAGE_PREFIX + t for t in texts]
+    try:
+        response = httpx.post(
+            EMBED_URL,
+            json={"model": "bge-m3", "input": prefixed},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [item["embedding"] for item in data["data"]]
+    except httpx.ConnectError:
+        print("ERROR: Embedding server not reachable. Is llama-embed.service running?", file=sys.stderr)
+        sys.exit(1)
 
 
 def index_lib(lib_name, full=False):
@@ -178,10 +174,8 @@ def index_lib(lib_name, full=False):
                         all_embeddings.extend(embed_texts([single]))
                     except Exception as e:
                         print(f"\n  Skipping chunk {i+j} (too large): {str(e)[:60]}")
-                        all_embeddings.append([0.0] * 768)
+                        all_embeddings.append([0.0] * 1024)  # placeholder
             print(f"  Embedding {rel}: {min(i + batch_size, len(chunks))}/{len(chunks)} chunks...", end="\r")
-        # Replace any None from embed_texts with zero placeholder
-        all_embeddings = [e if e is not None else [0.0] * 768 for e in all_embeddings]
 
         print()
         ids = [f"{lib_name}::{file_path}::{i}" for i in range(len(chunks))]

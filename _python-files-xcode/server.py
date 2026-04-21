@@ -5,7 +5,7 @@ import chromadb
 from chromadb.config import Settings
 from mcp.server.fastmcp import FastMCP
 from functools import lru_cache
-from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, REACT_DOCS
+from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_QUERY_PREFIX, REACT_DOCS
 from verify import verify
 
 mcp = FastMCP("Context Engine")
@@ -23,10 +23,10 @@ def _get_embedding(query: str) -> list:
     """Embed a query string, cached by query text."""
     response = _http_client.post(
         EMBED_URL,
-        json={"model": "nomic-embed-text", "prompt": f"search_query: {query}"},
+        json={"model": "bge-m3", "input": f"{EMBED_QUERY_PREFIX}{query}"},
     )
     response.raise_for_status()
-    return response.json()["embedding"]
+    return response.json()["data"][0]["embedding"]
 
 
 @mcp.tool()
@@ -92,7 +92,7 @@ def semantic_search(query: str, repo_name: str, n_results: int = 3, task_progres
     try:
         vector = _get_embedding(query)
     except httpx.ConnectError:
-        return "Embedding server not available. Run: brew services start ollama"
+        return "Embedding server not available. Run: sudo systemctl start llama-embed"
     except Exception as e:
         return f"Embedding error: {str(e)}"
 

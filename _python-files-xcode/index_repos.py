@@ -3,11 +3,12 @@ import sys
 import json
 import hashlib
 import argparse
+import fnmatch
 import httpx
 import chromadb
 from chromadb.config import Settings
 from config import (
-    REPO_ROOT, CHROMA_DIR, EMBED_URL,
+    REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_PASSAGE_PREFIX,
     INDEXABLE_EXTENSIONS, EXCLUDED_DIRS, EXCLUDED_FILES,
     CHUNK_CHARS, CHUNK_OVERLAP, REPO_MANIFEST_PATH as MANIFEST_PATH,
 )
@@ -77,40 +78,87 @@ def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=CHUNK_OVERLAP):
     return chunks
 
 
-def embed_texts(texts):
-    """Embed a list of texts via Ollama (one request per text). Skips chunks that error."""
-    embeddings = []
-    for text in texts:
+def embed_texts(texts, batch_size=8):
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i + batch_size]
+        batch = [EMBED_PASSAGE_PREFIX + t for t in batch_texts]
         try:
             response = httpx.post(
                 EMBED_URL,
-                json={"model": "nomic-embed-text", "prompt": "search_document: " + text},
+                json={"model": "bge-m3", "input": batch},
                 timeout=60.0,
             )
             response.raise_for_status()
-            embeddings.append(response.json()["embedding"])
+            data = response.json()
+            all_embeddings.extend([item["embedding"] for item in data["data"]])
         except httpx.ConnectError:
-            print("ERROR: Ollama not reachable at 11434. Run: brew services start ollama", file=sys.stderr)
+            print("ERROR: Embedding server not reachable at 11435. Is llama-embed.service running?", file=sys.stderr)
             sys.exit(1)
-        except Exception:
-            embeddings.append(None)
-    return embeddings
+        except httpx.HTTPStatusError as e:
+            if len(batch_texts) == 1:
+                # Single chunk failed — log and substitute a zero vector so indexing continues
+                print(f"  WARNING: embedding failed for chunk (skipping): {repr(batch_texts[0][:80])}", file=sys.stderr)
+                all_embeddings.append([0.0] * 1024)
+            else:
+                # Batch failed — retry each chunk individually to isolate the bad one
+                for single in batch_texts:
+                    try:
+                        r = httpx.post(
+                            EMBED_URL,
+                            json={"model": "bge-m3", "input": [EMBED_PASSAGE_PREFIX + single]},
+                            timeout=60.0,
+                        )
+                        r.raise_for_status()
+                        all_embeddings.append(r.json()["data"][0]["embedding"])
+                    except Exception:
+                        print(f"  WARNING: embedding failed for chunk (skipping): {repr(single[:80])}", file=sys.stderr)
+                        all_embeddings.append([0.0] * 1024)
+    return all_embeddings
 
 
-MAX_FILE_BYTES = 50_000  # skip generated assets / minified bundles
+def load_chromaignore(repo_path: str) -> list[str]:
+    """Load patterns from .chromaignore in the repo root. One pattern per line, # for comments."""
+    ignore_path = os.path.join(repo_path, ".chromaignore")
+    if not os.path.exists(ignore_path):
+        return []
+    with open(ignore_path) as f:
+        return [
+            line.strip() for line in f
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+
+def is_ignored(rel_path: str, patterns: list[str]) -> bool:
+    rel_path = rel_path.replace(os.sep, "/")
+    for pattern in patterns:
+        p = pattern.rstrip("/").replace("**", "*")
+        if fnmatch.fnmatch(rel_path, p):
+            return True
+        if fnmatch.fnmatch(rel_path, p + "/*"):
+            return True
+        parts = rel_path.split("/")
+        for i in range(len(parts)):
+            if fnmatch.fnmatch("/".join(parts[:i + 1]), p):
+                return True
+    return False
 
 
 def iter_repo_files(repo_path):
+    ignore_patterns = load_chromaignore(repo_path)
     for root, dirs, files in os.walk(repo_path):
         dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
         for fname in files:
             if fname in EXCLUDED_FILES:
                 continue
             ext = os.path.splitext(fname)[1]
-            if ext in INDEXABLE_EXTENSIONS:
-                full = os.path.join(root, fname)
-                if os.path.getsize(full) <= MAX_FILE_BYTES:
-                    yield full
+            if ext not in INDEXABLE_EXTENSIONS:
+                continue
+            abs_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(abs_path, repo_path)
+            if ignore_patterns and is_ignored(rel_path, ignore_patterns):
+                continue
+            yield abs_path
 
 
 def index_repo(repo_name, full=False):
@@ -165,13 +213,7 @@ def index_repo(repo_name, full=False):
         texts = [c[2] for c in chunks]
         embeddings = embed_texts(texts)
 
-        # Filter out any chunks where embedding failed
-        valid = [(i, t, e) for i, (t, e) in enumerate(zip(texts, embeddings)) if e is not None]
-        if not valid:
-            continue
-
-        valid_indices, valid_texts, valid_embeddings = zip(*valid)
-        ids = [f"{repo_name}::{rel_path}::{i}" for i in valid_indices]
+        ids = [f"{repo_name}::{rel_path}::{i}" for i in range(len(chunks))]
         metadatas = [
             {
                 "repo_name": repo_name,
@@ -181,10 +223,10 @@ def index_repo(repo_name, full=False):
                 "file_ext": os.path.splitext(rel_path)[1],
                 "chunk_index": i,
             }
-            for i in valid_indices
+            for i in range(len(chunks))
         ]
 
-        collection.upsert(ids=ids, embeddings=list(valid_embeddings), documents=list(valid_texts), metadatas=metadatas)
+        collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         repo_manifest[rel_path] = file_hash
         total_chunks += len(chunks)
         print(f"  Indexed {rel_path} ({len(chunks)} chunks)")

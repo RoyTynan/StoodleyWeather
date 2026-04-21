@@ -24,7 +24,7 @@ VS Code / Cline (Mac)
   proxy.py :8000          ← enriches prompts with RAG context
         ↓
   ChromaDB (local)        ← vector + BM25 index of v4visuals
-  Ollama :11434           ← nomic-embed-text embeddings (Metal, unified memory)
+  Ollama :11434           ← bge-m3 embeddings (Metal, unified memory)
         ↓
   i9 llama-server :8080   ← Qwen2.5-Coder-32B-Instruct Q8_0 (LLM inference)
 ```
@@ -53,7 +53,7 @@ A local file watcher on the Mac monitors the repo for changes and syncs modified
 
 The Mac setup does have a local ChromaDB (used as a fallback), but the i7 is the preferred indexing target because:
 
-- It runs the embedding server (`nomic-embed-text` via llama.cpp) at full speed on the RTX 2060
+- It runs the embedding server (`bge-m3` via llama.cpp) at full speed on the RTX 2060
 - It keeps the Mac free of indexing load during development
 - The i7's MCP tools and proxy are already configured and battle-tested
 
@@ -141,9 +141,9 @@ brew services start ollama   # start
 brew services stop ollama    # stop
 ```
 
-Model: `nomic-embed-text` loaded from local GGUF:
+Model: `bge-m3` loaded from local GGUF:
 ```
-~/dev/mcp-tools/models/nomic-embed-text-v1.5.Q4_K_M.gguf
+~/dev/mcp-tools/models/bge-m3-Q8_0.gguf
 ```
 
 Registered via Modelfile — no internet download required.

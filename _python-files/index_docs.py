@@ -13,7 +13,7 @@ import httpx
 import chromadb
 from chromadb.config import Settings
 from config import (
-    CHROMA_DIR, EMBED_URL, DOCS_SOURCES,
+    CHROMA_DIR, EMBED_URL, EMBED_PASSAGE_PREFIX, DOCS_SOURCES,
     DOCS_EXTENSIONS, DOCS_EXCLUDED_DIRS as EXCLUDED_DIRS,
     DOCS_CHUNK_CHARS as CHUNK_CHARS, DOCS_CHUNK_OVERLAP as CHUNK_OVERLAP,
     DOCS_MANIFEST_PATH as MANIFEST_PATH,
@@ -84,11 +84,11 @@ def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=CHUNK_OVERLAP):
 
 
 def embed_texts(texts):
-    prefixed = ["search_document: " + t for t in texts]
+    prefixed = [EMBED_PASSAGE_PREFIX + t for t in texts]
     try:
         response = httpx.post(
             EMBED_URL,
-            json={"model": "nomic-embed-text", "input": prefixed},
+            json={"model": "bge-m3", "input": prefixed},
             timeout=120.0,
         )
         response.raise_for_status()
@@ -174,7 +174,7 @@ def index_lib(lib_name, full=False):
                         all_embeddings.extend(embed_texts([single]))
                     except Exception as e:
                         print(f"\n  Skipping chunk {i+j} (too large): {str(e)[:60]}")
-                        all_embeddings.append([0.0] * 768)  # placeholder
+                        all_embeddings.append([0.0] * 1024)  # placeholder
             print(f"  Embedding {rel}: {min(i + batch_size, len(chunks))}/{len(chunks)} chunks...", end="\r")
 
         print()

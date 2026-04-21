@@ -153,8 +153,8 @@ GB increments — useful for a 34.8GB file.
 python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='nomic-ai/nomic-embed-text-v1.5-GGUF',
-    filename='nomic-embed-text-v1.5.Q4_K_M.gguf',
+    repo_id='BAAI/bge-m3-GGUF',
+    filename='bge-m3-Q8_0.gguf',
     local_dir='/mnt/storage/models/'
 )"
 ```
@@ -271,14 +271,14 @@ Create `/etc/systemd/system/llama-embed.service`:
 
 ```ini
 [Unit]
-Description=llama.cpp embedding server (nomic-embed-text)
+Description=llama.cpp embedding server (bge-m3)
 After=network.target
 
 [Service]
 Type=simple
 User=yourusername
 ExecStart=/home/yourusername/llama.cpp/build/bin/llama-server \
-  --model /mnt/storage/models/nomic-embed-text-v1.5.Q4_K_M.gguf \
+  --model /mnt/storage/models/bge-m3-Q8_0.gguf \
   --port 11435 \
   --host 127.0.0.1 \
   --ctx-size 8192 \
@@ -593,7 +593,7 @@ calls it automatically in the background after every commit.
 3. **If the file is unchanged, it skips it.** This is why incremental runs are fast.
 4. For changed files it splits the content into overlapping 600-character chunks (with a 120-
    character overlap so context is not lost at chunk boundaries).
-5. Sends each chunk to `llama-server` on port 11435 to get a 768-dimension vector embedding.
+5. Sends each chunk to `llama-server` on port 11435 to get a 1024-dimension vector embedding.
 6. Upserts the chunks, embeddings, and metadata (file path, line numbers) into ChromaDB under
    the collection `repo_<reponame>`.
 7. Saves the updated hash manifest so the next run knows what has already been indexed.
@@ -759,11 +759,11 @@ Each library you add via [ADDING-DOCS.md](ADDING-DOCS.md) creates a new `docs_<n
 
 | Property | Value |
 |---|---|
-| Model | nomic-embed-text-v1.5 |
-| Quantisation | Q4_K_M |
-| File | `/mnt/storage/models/nomic-embed-text-v1.5.Q4_K_M.gguf` |
+| Model | bge-m3 |
+| Quantisation | Q8_0 |
+| File | `/mnt/storage/models/bge-m3-Q8_0.gguf` |
 | Context window | 8,192 tokens |
-| Dimensions | 768 |
+| Dimensions | 1024 |
 | Host | i7 (RTX 2060) |
 | Port | 11435 |
 
@@ -772,7 +772,7 @@ Each library you add via [ADDING-DOCS.md](ADDING-DOCS.md) creates a new `docs_<n
 ```
 /mnt/storage/
 ├── models/
-│   └── nomic-embed-text-v1.5.Q4_K_M.gguf
+│   └── bge-m3-Q8_0.gguf
 ├── chromadb/                        # Persisted vector index (~516MB)
 │   ├── index_manifest.json          # Repo file hash manifest
 │   └── docs_manifest.json           # Docs file hash manifest

@@ -23,10 +23,12 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from rank_bm25 import BM25Okapi
 from config import (
-    LLM_URL, CHROMA_DIR, REPO_ROOT, EMBED_URL,
+    LLM_URL, CHROMA_DIR, REPO_ROOT, EMBED_URL, EMBED_QUERY_PREFIX,
     INDEX_SCRIPT, VENV_PYTHON, N_CONTEXT_CHUNKS,
     INDEXABLE_EXTENSIONS, EXCLUDED_DIRS, SKELETON_MAX_FILES,
 )
+from rerank import rerank
+from verify import verify
 
 from contextlib import asynccontextmanager
 
@@ -72,6 +74,29 @@ _EXPORT_PATTERNS = [
 
 RRF_K = 60              # RRF constant — higher = smoother rank blending
 CANDIDATE_POOL = N_CONTEXT_CHUNKS * 3  # candidates fetched from each search method
+
+# Pending verification results — written by background thread, consumed by enrich_messages
+_pending_verify: dict[str, str] = {}
+
+# Matches Cline tool result messages that indicate a file was written
+_FILE_WRITE_PATTERN = re.compile(
+    r'\[\s*(?:write_to_file|replace_in_file|create_file)\s+for\s+[\'"]',
+    re.IGNORECASE,
+)
+
+
+def _schedule_verify(repo_name: str):
+    """Run verify in a background thread and store the result for the next prompt."""
+    def run():
+        repo_path = os.path.join(REPO_ROOT, repo_name)
+        try:
+            result = verify(repo_path, repo_name)
+            _pending_verify[repo_name] = result.summary()
+            status = "PASS" if result.passed else "FAIL"
+            print(f"[proxy] auto-verify {status} for {repo_name}")
+        except Exception as e:
+            print(f"[proxy] auto-verify error for {repo_name}: {e}")
+    threading.Thread(target=run, daemon=True).start()
 
 
 def get_repos() -> list[str]:
@@ -206,7 +231,7 @@ def start_file_watcher():
 def get_embedding(text: str) -> list:
     response = _http_client.post(
         EMBED_URL,
-        json={"model": "nomic-embed-text", "input": f"search_query: {text}"},
+        json={"model": "bge-m3", "input": f"{EMBED_QUERY_PREFIX}{text}"},
     )
     response.raise_for_status()
     return response.json()["data"][0]["embedding"]
@@ -270,13 +295,13 @@ def hybrid_search(query: str, repo_name: str) -> str:
         rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
         chunk_map[key] = (doc, meta)
 
-    top_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)[:N_CONTEXT_CHUNKS]
+    all_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
+    all_chunks = [(chunk_map[k][0], chunk_map[k][1]) for k in all_keys]
+    reranked = rerank(query, all_chunks, top_n=N_CONTEXT_CHUNKS)
 
     parts = []
-    for key in top_keys:
-        doc, meta = chunk_map[key]
-        score = round(rrf_scores[key], 4)
-        print(f"[proxy] chunk: {meta['file_path']} lines {meta['start_line']}–{meta['end_line']} (rrf={score})")
+    for doc, meta in reranked:
+        print(f"[proxy] chunk: {meta['file_path']} lines {meta['start_line']}–{meta['end_line']} (reranked)")
         parts.append(f"// {meta['file_path']} (lines {meta['start_line']}–{meta['end_line']})\n{doc.strip()}")
 
     return "\n\n".join(parts)
@@ -308,7 +333,12 @@ def enrich_messages(messages: list) -> list:
     # Skip enrichment for Cline internal messages — tool results, errors, retries.
     # These start with [ and are not user prompts.
     if user_content.lstrip().startswith("["):
-        print("[proxy] skipping enrichment — Cline internal message")
+        repo_name = detect_repo(messages)
+        if repo_name and _FILE_WRITE_PATTERN.search(user_content):
+            _schedule_verify(repo_name)
+            print(f"[proxy] file write detected — verification scheduled for {repo_name}")
+        else:
+            print("[proxy] skipping enrichment — Cline internal message")
         return messages
 
     match = re.search(r'\b(?:read|edit|update|fix|change|look at|in)\s+src/[\w./\-]+\.\w+', user_content, re.IGNORECASE)
@@ -326,15 +356,20 @@ def enrich_messages(messages: list) -> list:
     with _skeleton_lock:
         skeleton = _repo_skeletons.get(repo_name)
 
-    if chunks or skeleton:
+    pending_verify = _pending_verify.pop(repo_name, None)
+
+    if chunks or skeleton or pending_verify:
         parts = []
+        if pending_verify:
+            parts.append(f"Verification result from previous edit:\n{pending_verify}")
+            print(f"[proxy] injecting pending verify result for {repo_name}")
         if skeleton:
             parts.append(f"Codebase structure ({repo_name}):\n{skeleton}")
         if chunks:
             parts.append(f"Relevant code from the project:\n\n{chunks}")
         parts.append(user_content)
         enriched_content = "\n\n---\n\n".join(parts)
-        print(f"[proxy] injecting skeleton={skeleton is not None}, chunks={bool(chunks)} for: {user_content[:80]}")
+        print(f"[proxy] injecting skeleton={skeleton is not None}, chunks={bool(chunks)}, verify={pending_verify is not None} for: {user_content[:80]}")
         messages = list(messages)
         messages[last_user_idx] = {**messages[last_user_idx], "content": enriched_content}
     else:

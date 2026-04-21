@@ -10,10 +10,28 @@ The whole point of this repo is described via the documents found at the bottom 
 
 It is about setting up and running llama server, specifically llama.cpp, to act as a software coding assistant along the lines of Claude Code.
 
-The app that's presented and gives the name to the repo, StoodleyWeather, is a test Next.js app that allows a user to test the coding assistant against a real-world application.
+The app that's presented and gives the name to the repo, StoodleyWeather, is a test Next.js app that allows a user to test the coding assistant against a real-world application.<br>
 
-As just mentioned, the real purpose of this repo is detailed in the documents given at the bottom of this page.
 
+# What this "system" does
+
+An i7 Ubuntu machine runs an embedding server (bge-m3-Q8_0 via llama.cpp) and a FastAPI proxy, while an i9 Ubuntu machine with 48GB VRAM runs the main LLM (Qwen2.5-Coder-32B). 
+
+At its core is a RAG (Retrieval-Augmented Generation) pipeline — source code from all active repos is chunked and embedded into 1024-dimensional vectors, then persisted in ChromaDB, a local vector database that stores both the embeddings and the original source chunks with metadata (file path, line numbers, repo name). 
+
+At query time ChromaDB performs approximate nearest-neighbour search to find semantically similar chunks, which are combined with BM25 keyword results and fused through Reciprocal Rank Fusion. 
+
+This candidate pool is then passed through a cross-encoder reranker (ms-marco-MiniLM-L-6-v2) which scores each chunk against the actual query as a pair rather than independently — producing a much more precise final selection than vector similarity alone can achieve. 
+
+The enriched context is injected into every prompt sent to the LLM, meaning Cline receives highly accurate codebase context without you having to manually reference files. 
+
+The system also exposes its capabilities — semantic search, file reading, documentation search, and automated build/type verification — as MCP (Model Context Protocol) tools, allowing Claude Code and Cline to call them directly as part of their agentic workflows. 
+
+Repos are watched for file changes and re-indexed automatically, per-repo .chromaignore files exclude large data files from the index, and the whole stack is documented with a new-project checklist so it can be extended quickly.
+
+The Python code to run all of this is presented in this repo.
+
+Everything is documented, see the documents given at the bottom of this page.
 
 # Introduction
 
@@ -29,9 +47,6 @@ Hopefully this repo and the document you are currently reading will help you set
 
 I hope this helps. Thank you, and regards — Roy.
 
-This repository and everything in it is shared freely and publicly on GitHub. No paywalls, no
-newsletter signups, no courses to buy. If it saves you time or helps you get your own setup
-running, that is reward enough. 
 If you find it useful and you're a GitHub member, a GitHub star is always appreciated —
 it helps others find it.
 
@@ -40,7 +55,7 @@ it helps others find it.
 
 You can contact me on roytynandev@gmail.com<br><br>
 I try to reply to everyone but I can't guarantee a quick response.<br>
-Any criticisms please keep constructive, otherwise I'll just crawl off to my local pub for a calming beer or 10.
+Any criticisms please keep constructive, otherwise I'll just crawl off to my local pub for a calming beer or ten.
 
 
 ## Purpose

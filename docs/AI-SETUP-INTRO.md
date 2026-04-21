@@ -84,7 +84,7 @@ An open-source Python vector database that stores embeddings of all source files
 
 ## Embeddings
 
-`nomic-embed-text-v1.5` runs as a systemd service (`llama-embed`) on the i7's RTX 2060. Used by:
+`bge-m3-Q8_0` runs as a systemd service (`llama-embed`) on the i7's RTX 2060. Used by:
 - `index_repos.py` — to embed source file chunks when indexing
 - `proxy.py` — to embed incoming prompts before querying ChromaDB
 
