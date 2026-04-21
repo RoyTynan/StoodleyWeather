@@ -31,29 +31,28 @@ VS Code / Cline (Mac)
 
 ---
 
-## Project Repo Location — Dual Copy with File Sync
+## Project Repo Location — Dual Copy with Automated File Sync
 
-The React Native repo must live on the Mac — Xcode and the iOS/Android simulators require local access to the source. But the RAG indexing system (ChromaDB, the file watcher, the embedding server) runs on the i7 Ubuntu server, which is where the full AI setup lives.
+The React Native repo must live on the Mac — Xcode and the iOS/Android simulators require local access to the source. But the RAG indexing system (ChromaDB, the embedding server) runs on the i7 Ubuntu server.
 
 To bridge this, the project runs as **two synchronised copies**:
 
 ```
 Mac Mini                          i7 Ubuntu
-~/dev/v4/v4visuals/    ←sync→    /home/roy/mcp-context/repos/v4visuals/
+~/dev/v4/v4visuals/    ──────→   /home/roy/mcp-context/repos/v4visuals/
   (edit here, run Expo/Xcode)       (indexed here, RAG always up to date)
 ```
 
-A local file watcher on the Mac monitors the repo for changes and syncs modified files to the i7 automatically. This means:
+A local file watcher script runs on the Mac and monitors the repo for changes. When a file is saved, it rsyncs the changed file to the i7 over SSH. The i7's `mcp-indexer.service` (see [AUTO-INDEXING.md](AUTO-INDEXING.md)) detects the incoming changes, debounces, and triggers a reindex automatically. No manual steps required.
 
+This means:
 - You code and run the app entirely on the Mac
-- The i7's file watcher detects the incoming changes, triggers a re-index, and keeps ChromaDB current
-- Every Cline request is enriched with up-to-date RAG context from the i7, even though the code lives on the Mac
+- The i7 stays in sync and keeps ChromaDB current automatically
+- Every Cline request is enriched with up-to-date RAG context from the i7
 
 ### Why not index on the Mac?
 
-The Mac setup does have a local ChromaDB (used as a fallback), but the i7 is the preferred indexing target because:
-
-- It runs the embedding server (`bge-m3` via llama.cpp) at full speed on the RTX 2060
+- The i7 runs the embedding server (`bge-m3` via llama.cpp) at full speed on the RTX 2060 — faster than Mac Metal for this workload
 - It keeps the Mac free of indexing load during development
 - The i7's MCP tools and proxy are already configured and battle-tested
 
@@ -152,13 +151,11 @@ Registered via Modelfile — no internet download required.
 
 ## ChromaDB
 
-Location: `~/dev/mcp-tools/chromadb_data/`
+The primary ChromaDB index lives on the i7 and is kept up to date automatically by `mcp-indexer.service` as the Mac watcher syncs file changes over. Manual reindexing on the Mac is no longer required for normal development.
 
-Indexed repos: **v4visuals only** (stoodleyweather remains indexed on i7).
-
-To re-index after significant code changes:
+If needed, a full reindex can be forced on the i7:
 ```bash
-cd ~/dev/mcp-tools && .venv/bin/python index_repos.py --repo v4visuals
+ssh roy@192.168.178.35 "cd /mnt/storage/mcp-tools && .venv/bin/python index_repos.py --repo v4visuals --full"
 ```
 
 ---

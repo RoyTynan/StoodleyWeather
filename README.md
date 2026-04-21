@@ -142,3 +142,4 @@ src/
 | [docs/CLINE-PROMPTS.md](docs/CLINE-PROMPTS.md) | Example prompts for using Cline with the MCP tools — semantic search, doc search, code tasks |
 | [_python-files/](_python-files/) | The MCP server, proxy and indexer Python scripts ready to copy to your own machine |
 | [docs/MAC-XCODE-ISSUES.md](docs/MAC-XCODE-ISSUES.md) | Running the proxy and MCP tools on a Mac when Xcode or other Mac-only tooling is required |
+| [docs/AUTO-INDEXING.md](docs/AUTO-INDEXING.md) | How the auto-indexer works — `watcher.py`, systemd service, `.chromaignore`, and `.md` file support |

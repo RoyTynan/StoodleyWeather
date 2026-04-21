@@ -51,7 +51,7 @@ VENV_PYTHON = os.path.join(TOOLS_DIR, ".venv/bin/python")
 # ===========================================================
 
 # File types to index into ChromaDB
-INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json"}
+INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".md"}
 
 # Directories to skip during indexing and file watching
 EXCLUDED_DIRS = {"node_modules", ".next", "dist", "build", ".git", ".venv"}
