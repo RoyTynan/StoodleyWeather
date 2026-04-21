@@ -18,6 +18,7 @@ logging.basicConfig(
     format="%(asctime)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 

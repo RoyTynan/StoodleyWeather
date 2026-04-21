@@ -62,6 +62,20 @@ class VerifyResult:
 
 # ── Stack detection ──────────────────────────────────────────────────────────
 
+_JS_SUBDIRS = ["frontend", "client", "web", "app", "ui"]
+
+
+def find_js_root(repo_path: str) -> str:
+    """Return the directory containing package.json — repo root or a known subdirectory."""
+    if os.path.exists(os.path.join(repo_path, "package.json")):
+        return repo_path
+    for sub in _JS_SUBDIRS:
+        candidate = os.path.join(repo_path, sub)
+        if os.path.exists(os.path.join(candidate, "package.json")):
+            return candidate
+    return repo_path
+
+
 def detect_stacks(repo_path: str) -> list[str]:
     """
     Inspect repo_path and return detected stack identifiers.
@@ -69,7 +83,8 @@ def detect_stacks(repo_path: str) -> list[str]:
     """
     stacks: list[str] = []
 
-    pkg_path = os.path.join(repo_path, "package.json")
+    js_root = find_js_root(repo_path)
+    pkg_path = os.path.join(js_root, "package.json")
     if os.path.exists(pkg_path):
         try:
             with open(pkg_path, encoding="utf-8") as f:
@@ -85,13 +100,13 @@ def detect_stacks(repo_path: str) -> list[str]:
 
             has_ts = (
                 "typescript" in deps
-                or os.path.exists(os.path.join(repo_path, "tsconfig.json"))
+                or os.path.exists(os.path.join(js_root, "tsconfig.json"))
             )
             if has_ts and "typescript" not in stacks:
                 stacks.append("typescript")
         except (json.JSONDecodeError, OSError):
             pass
-    elif os.path.exists(os.path.join(repo_path, "tsconfig.json")):
+    elif os.path.exists(os.path.join(js_root, "tsconfig.json")):
         stacks.append("typescript")
 
     # C++ — CMake takes priority over a bare Makefile
@@ -137,8 +152,9 @@ def check_eslint(repo_path: str) -> CheckResult | None:
     ]
     if not any(os.path.exists(os.path.join(repo_path, f)) for f in config_files):
         return None
+    src_dir = "src" if os.path.isdir(os.path.join(repo_path, "src")) else "app" if os.path.isdir(os.path.join(repo_path, "app")) else "."
     passed, output = _run(
-        ["npx", "--no-install", "eslint", "src/",
+        ["npx", "--no-install", "eslint", src_dir,
          "--ext", ".ts,.tsx,.js,.jsx", "--max-warnings", "0"],
         cwd=repo_path,
         timeout=60,
@@ -194,13 +210,14 @@ def verify(repo_path: str, repo_name: str) -> VerifyResult:
     Returns a VerifyResult with pass/fail status and any error output.
     """
     stacks = detect_stacks(repo_path)
+    js_root = find_js_root(repo_path)
     checks: list[CheckResult] = []
 
     needs_tsc = any(s in stacks for s in ("typescript", "react", "react-native"))
 
     if needs_tsc:
-        checks.append(check_tsc(repo_path))
-        eslint = check_eslint(repo_path)
+        checks.append(check_tsc(js_root))
+        eslint = check_eslint(js_root)
         if eslint is not None:
             checks.append(eslint)
 

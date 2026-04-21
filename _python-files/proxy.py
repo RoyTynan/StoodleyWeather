@@ -401,7 +401,18 @@ async def chat_completions(request: Request):
         return StreamingResponse(generate(), media_type="text/event-stream")
     else:
         response = _http_client.post(f"{LLM_URL}/v1/chat/completions", json=body)
-        return JSONResponse(content=response.json(), status_code=response.status_code)
+        data = response.json()
+        choices = data.get("choices", [])
+        msg = choices[0].get("message", {}) if choices else {}
+        finish = choices[0].get("finish_reason") if choices else None
+        tool_calls = msg.get("tool_calls")
+        content = msg.get("content")
+        print(f"[proxy] LLM response: status={response.status_code} finish={finish} content={bool(content)} tool_calls={bool(tool_calls)}")
+        if tool_calls:
+            print(f"[proxy] tool_calls present: {str(tool_calls)[:300]}")
+        if not choices or not content:
+            print(f"[proxy] WARNING: unexpected LLM response: {str(data)[:500]}")
+        return JSONResponse(content=data, status_code=response.status_code)
 
 
 @app.post("/reindex")

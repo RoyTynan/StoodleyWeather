@@ -23,10 +23,11 @@ to date without manual intervention.
 Controlled by `INDEXABLE_EXTENSIONS` in `config.py`:
 
 ```python
-INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".md"}
+INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".md", ".py", ".cpp", ".h", ".c"}
 ```
 
 `.md` was added to allow project documentation to be semantically searchable.
+`.py`, `.cpp`, `.h`, `.c` were added so Python and C/C++ projects are indexed alongside web projects.
 
 ---
 

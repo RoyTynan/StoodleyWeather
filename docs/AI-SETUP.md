@@ -321,9 +321,10 @@ The folder contains:
 | `proxy.py` | LLM proxy — context enrichment, file watcher |
 | `server.py` | MCP context-engine server — includes `verify_project` tool |
 | `docs_server.py` | MCP docs-engine server |
-| `verify.py` | Stack auto-detection and check runner used by `verify_project` |
+| `verify.py` | Stack auto-detection and check runner used by `verify_project` — handles monorepos where `package.json` lives in a subdirectory |
 | `index_repos.py` | Repo indexer |
 | `index_docs.py` | Documentation indexer |
+| `start-proxy.sh` | One-line shortcut to start `proxy.py` from the tools directory |
 | `start-services.sh` | Post-reboot health check |
 | `update-docs.sh` | Pull and re-index all documentation sources |
 | `pyproject.toml` | uv project definition |
@@ -348,6 +349,8 @@ All paths, addresses, and tunable settings live in `config.py`. This is the only
 | Constant | Default | Description |
 |---|---|---|
 | `EMBED_URL` | `http://127.0.0.1:11435/v1/embeddings` | Embedding server — runs locally via `llama-embed` |
+| `EMBED_QUERY_PREFIX` | `"query: "` | Prefix prepended to query text before embedding (bge-m3 requirement) |
+| `EMBED_PASSAGE_PREFIX` | `"passage: "` | Prefix prepended to document chunks before embedding (bge-m3 requirement) |
 | `LLM_URL` | `http://192.168.178.99:8080` | LLM inference server on the i9 — used by `proxy.py` only |
 
 **Proxy**
@@ -362,7 +365,7 @@ All paths, addresses, and tunable settings live in `config.py`. This is the only
 
 | Constant | Default | Description |
 |---|---|---|
-| `INDEXABLE_EXTENSIONS` | `.ts .tsx .js .jsx .css .json` | File types to embed into ChromaDB |
+| `INDEXABLE_EXTENSIONS` | `.ts .tsx .js .jsx .css .json .md .py .cpp .h .c` | File types to embed into ChromaDB |
 | `EXCLUDED_DIRS` | `node_modules .next dist build .git .venv` | Directories to skip |
 | `EXCLUDED_FILES` | `package-lock.json` | Specific files to skip |
 | `CHUNK_CHARS` | `600` | Characters per chunk when splitting source files |
@@ -397,6 +400,12 @@ See [ADDING-DOCS.md](ADDING-DOCS.md) for the full indexing process per library. 
 ### 5.5 Start the proxy
 
 The proxy must be running before you use Cline. Start it manually after each reboot:
+
+```bash
+bash /mnt/storage/mcp-tools/start-proxy.sh
+```
+
+Or equivalently:
 
 ```bash
 cd /mnt/storage/mcp-tools
@@ -519,8 +528,7 @@ bash /home/yourusername/start-llm.sh
 The `llama-embed` service starts automatically. Start the proxy manually:
 
 ```bash
-cd /mnt/storage/mcp-tools
-.venv/bin/python proxy.py
+bash /mnt/storage/mcp-tools/start-proxy.sh
 ```
 
 To verify everything is healthy:
@@ -660,6 +668,8 @@ Every `/v1/chat/completions` request from Cline passes through the proxy:
 4. Injects the chunks into the prompt before forwarding to the i9
 5. Streams the response back to Cline
 
+For non-streaming responses, the proxy logs `finish_reason`, whether `content` and `tool_calls` are present, and warns to the terminal if the LLM returns an unexpected payload (empty choices, missing content). This makes it easier to diagnose tool-call or context-window issues.
+
 It also runs a **file watcher** (watchdog) over all repos under `REPO_ROOT`. When any tracked file (`.ts`, `.tsx`, `.js`, `.jsx`, `.css`, `.json`) is saved, it schedules a re-index of that repo after a 3-second debounce. Each repo has its own independent debounce timer.
 
 A `/reindex` endpoint allows forcing a re-index from the terminal:
@@ -794,6 +804,7 @@ Each library you add via [ADDING-DOCS.md](ADDING-DOCS.md) creates a new `docs_<n
 │   ├── docs_server.py               # MCP docs-engine server (FastMCP)
 │   ├── index_repos.py               # Repo indexing script
 │   ├── index_docs.py                # Docs indexing script
+│   ├── start-proxy.sh               # Shortcut to start proxy.py
 │   ├── start-services.sh            # Post-reboot health check script
 │   ├── update-docs.sh               # Update and re-index all docs
 │   ├── pyproject.toml

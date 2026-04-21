@@ -25,8 +25,10 @@ TOOLS_DIR = "/mnt/storage/mcp-tools"
 # SERVERS
 # ===========================================================
 
-# Embedding server — runs on the i7 via llama-embed.service
+# Embedding server — runs on the i7 via llama-embed.service (bge-m3-Q8_0)
 EMBED_URL = "http://127.0.0.1:11435/v1/embeddings"
+EMBED_QUERY_PREFIX = "query: "      # bge-m3 query prefix
+EMBED_PASSAGE_PREFIX = "passage: "  # bge-m3 document prefix
 
 # LLM inference server — runs on the i9 (used by proxy.py only)
 LLM_URL = "http://192.168.178.99:8080"
@@ -51,7 +53,7 @@ VENV_PYTHON = os.path.join(TOOLS_DIR, ".venv/bin/python")
 # ===========================================================
 
 # File types to index into ChromaDB
-INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".md"}
+INDEXABLE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".md", ".py", ".cpp", ".h", ".c"}
 
 # Directories to skip during indexing and file watching
 EXCLUDED_DIRS = {"node_modules", ".next", "dist", "build", ".git", ".venv"}
