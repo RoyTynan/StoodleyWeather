@@ -444,7 +444,9 @@ In VS Code, open the Cline extension panel and go to **Settings**. Configure the
 #### MCP Servers
 
 Edit:
-`/home/yourusername/.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+`/home/yourusername/.vscode-server/data/User/globalStorage/roytynan.cline-roy/settings/cline_mcp_settings.json`
+
+> **Note:** The extension folder name depends on which Cline build you have installed. If `roytynan.cline-roy` doesn't exist, check for `saoudrizwan.claude-dev` instead.
 
 ```json
 {
@@ -453,15 +455,23 @@ Edit:
       "disabled": false,
       "timeout": 30,
       "type": "stdio",
-      "command": "/mnt/storage/mcp-tools/.venv/bin/python",
-      "args": ["/mnt/storage/mcp-tools/server.py"]
+      "command": "ssh",
+      "args": [
+        "yourusername@<i7-ip>",
+        "/mnt/storage/mcp-tools/.venv/bin/python",
+        "/mnt/storage/mcp-tools/server.py"
+      ]
     },
     "docs-engine": {
       "disabled": false,
       "timeout": 30,
       "type": "stdio",
-      "command": "/mnt/storage/mcp-tools/.venv/bin/python",
-      "args": ["/mnt/storage/mcp-tools/docs_server.py"]
+      "command": "ssh",
+      "args": [
+        "yourusername@<i7-ip>",
+        "/mnt/storage/mcp-tools/.venv/bin/python",
+        "/mnt/storage/mcp-tools/docs_server.py"
+      ]
     }
   }
 }
@@ -476,9 +486,11 @@ The setup uses two separate servers rather than one. This keeps the number of to
 small, which reduces the length of the system prompt Cline sends to the LLM and makes it
 easier for the model to generate correctly formatted tool calls.
 
+Each server is launched over SSH — Cline on the i9 spawns the Python process directly on the i7 via stdin/stdout. No network port is needed; SSH handles the transport. The servers only exist while VS Code is open; Cline starts and stops them automatically.
+
 **context-engine entry:**
-Runs `server.py` — the repo search server with 5 tools: `list_repos`, `read_repo_file`,
-`search_official_docs`, `read_doc_page`, and `semantic_search`.
+Runs `server.py` — the repo search server with tools: `list_repos`, `read_repo_file`,
+`search_official_docs`, `read_doc_page`, `semantic_search`, and `verify_project`.
 
 **docs-engine entry:**
 Runs `docs_server.py` — the documentation search server with 3 tools, one per indexed library:
@@ -490,7 +502,7 @@ already activated. Using `uv run` instead causes `uv` to re-resolve the environm
 VS Code launch, which adds a significant cold-start delay. Direct invocation avoids this
 entirely.
 
-> **Note:** Replace `/mnt/storage/mcp-tools/` with the path to your own MCP tools directory.
+> **Note:** Replace `yourusername@<i7-ip>` with your i7's username and IP address, and `/mnt/storage/mcp-tools/` with the path to your MCP tools directory.
 
 ---
 
