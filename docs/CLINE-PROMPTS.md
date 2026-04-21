@@ -199,6 +199,18 @@ Use search_react_docs to find how to use the useEffect hook, then read src/app/m
 
 ---
 
+## Cline Rules
+
+Each repo has a `.clinerules/` directory that tells Cline how to behave. The rules are split into two layers so they can be reused across projects:
+
+- **`.clinerules.md`** — generic behavioural rules that apply to any project and any language. Covers assumption surfacing (state interpretation before coding), minimal footprint (no speculative abstractions or extra dependencies), surgical changes (only touch code related to the request), and git behaviour.
+
+- **`.clinerules-typescript.md`** — TypeScript and React/React Native specific rules. Add this alongside the generic file for TS projects.
+
+For a new project, copy both relevant files from this repo's `.clinerules/` directory into the new repo. Cline reads all files in the `.clinerules/` folder and stacks them automatically. A C++ equivalent will be added when needed.
+
+---
+
 ## Project-Wide Understanding
 
 ```

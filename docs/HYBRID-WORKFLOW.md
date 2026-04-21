@@ -6,6 +6,8 @@ This document describes how to combine Claude Code (Anthropic's cloud-based reas
 
 ## Cost
 
+> **Note:** Prices correct as of 21st April 2026.
+
 Using Claude Code this way — for reasoning, planning, and writing prompts rather than executing every line of code — keeps token usage low enough to stay comfortably within the **Claude Pro subscription at £17/month ($20/month)**. You are not paying per token or per API call.
 
 The heavy, repetitive work (file reads, code generation, edits) is handled entirely by your local LLM at zero ongoing cost. Claude is used only for the high-value thinking that the local model genuinely struggles with — understanding the codebase, planning changes, and producing precise prompts.
@@ -13,6 +15,22 @@ The heavy, repetitive work (file reads, code generation, edits) is handled entir
 This is a significant advantage over using Claude Code (or any cloud model) as the primary coding assistant, where token costs from large context windows and repeated file reads can quickly exceed a flat monthly subscription.
 
 ---
+
+## Anthropic. / Claude new pricing structure 
+
+As of the end of March 2026.
+
+Anthropic has implemented modifications to how usage limits are managed, specifically affecting session capacity during weekday peak demand. 
+
+During these identified peak hours—defined as 5:00 a.m. to 11:00 a.m. Pacific Time (PT), which corresponds to 1:00 p.m. to 7:00 p.m. British Summer Time (BST)—the consumption rate of five-hour session limits for Free, Pro, and Max subscribers is accelerated. 
+
+While weekly usage allowances remain unchanged, this adjustment causes the allotted quota to deplete more rapidly during this window, effectively reducing the volume of tasks users can perform compared to off-peak periods.In addition to these subscription-based session changes, Anthropic has transitioned enterprise-level billing for tools such as Claude Code and the broader API environment. 
+
+The company has moved away from previous flat-fee seat models, shifting these customers toward a metered, per-token billing structure. 
+
+This aligns enterprise usage with standard API rates, where consumption is directly tied to the specific volume of input and output tokens processed. 
+
+These policy updates reflect a broader strategic shift toward managing high compute demand by prioritizing more predictable, consumption-based billing models across the platform.
 
 ## Local LLMs — What They Can and Cannot Do
 
