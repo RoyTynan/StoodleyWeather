@@ -10,10 +10,13 @@ repo from conversation context and queries the right collection.
 Configure the addresses and paths below to match your setup.
 """
 
+import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
+from datetime import datetime, timezone
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -32,8 +35,95 @@ from verify import verify
 
 from contextlib import asynccontextmanager
 
+PROMPT_LOG_DB = "/mnt/storage/prompt_log.db"
+
+_db_conn: sqlite3.Connection | None = None
+_db_lock = threading.Lock()
+
+
+def _init_db():
+    global _db_conn
+    _db_conn = sqlite3.connect(PROMPT_LOG_DB, check_same_thread=False)
+    _db_conn.execute("""
+        CREATE TABLE IF NOT EXISTS prompts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT    NOT NULL,
+            repo            TEXT,
+            raw_query       TEXT,
+            enriched_message TEXT,
+            full_messages   TEXT,
+            skeleton_injected INTEGER,
+            chunks_injected   INTEGER,
+            verify_injected   INTEGER,
+            finish_reason   TEXT,
+            response_text   TEXT,
+            latency_ms      INTEGER
+        )
+    """)
+    # Migrate existing DBs that predate response_text / latency_ms columns
+    existing = {row[1] for row in _db_conn.execute("PRAGMA table_info(prompts)")}
+    for col, definition in [("response_text", "TEXT"), ("latency_ms", "INTEGER")]:
+        if col not in existing:
+            _db_conn.execute(f"ALTER TABLE prompts ADD COLUMN {col} {definition}")
+    _db_conn.commit()
+    print(f"[db] prompt log: {PROMPT_LOG_DB}")
+
+
+def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> int | None:
+    if _db_conn is None:
+        return None
+    with _db_lock:
+        cur = _db_conn.execute(
+            """INSERT INTO prompts
+               (timestamp, repo, raw_query, enriched_message, full_messages,
+                skeleton_injected, chunks_injected, verify_injected, finish_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                meta.get("repo"),
+                meta.get("raw_query"),
+                meta.get("enriched_message"),
+                json.dumps(full_messages),
+                int(meta.get("skeleton_injected", False)),
+                int(meta.get("chunks_injected", False)),
+                int(meta.get("verify_injected", False)),
+                finish_reason,
+            ),
+        )
+        _db_conn.commit()
+        return cur.lastrowid
+
+
+def _update_log_response(log_id: int, response_text: str, finish_reason: str | None, latency_ms: int):
+    if _db_conn is None or log_id is None:
+        return
+    with _db_lock:
+        _db_conn.execute(
+            "UPDATE prompts SET response_text=?, finish_reason=?, latency_ms=? WHERE id=?",
+            (response_text, finish_reason, latency_ms, log_id),
+        )
+        _db_conn.commit()
+
+
+def _extract_streaming_text(chunks: list[bytes]) -> str:
+    """Reconstruct assistant text from buffered SSE chunks."""
+    parts = []
+    for chunk in chunks:
+        try:
+            for line in chunk.decode("utf-8", errors="ignore").splitlines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    data = json.loads(line[6:])
+                    content = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if content:
+                        parts.append(content)
+        except Exception:
+            pass
+    return "".join(parts)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _init_db()
     repos = get_repos()
     print(f"[proxy] repos found: {repos}")
     for repo in repos:
@@ -307,10 +397,15 @@ def hybrid_search(query: str, repo_name: str) -> str:
     return "\n\n".join(parts)
 
 
-def enrich_messages(messages: list) -> list:
-    """Inject relevant code chunks before the last user message."""
+def enrich_messages(messages: list) -> tuple[list, dict]:
+    """Inject relevant code chunks before the last user message.
+    Returns (enriched_messages, metadata_dict)."""
+    meta: dict = {
+        "repo": None, "raw_query": "", "enriched_message": "",
+        "skeleton_injected": False, "chunks_injected": False, "verify_injected": False,
+    }
     if not messages:
-        return messages
+        return messages, meta
 
     last_user_idx = None
     for i in range(len(messages) - 1, -1, -1):
@@ -319,7 +414,7 @@ def enrich_messages(messages: list) -> list:
             break
 
     if last_user_idx is None:
-        return messages
+        return messages, meta
 
     user_content = messages[last_user_idx].get("content", "")
     if isinstance(user_content, list):
@@ -332,6 +427,8 @@ def enrich_messages(messages: list) -> list:
     # Match src/ followed by a filename-like pattern to avoid false positives.
     # Skip enrichment for Cline internal messages — tool results, errors, retries.
     # These start with [ and are not user prompts.
+    meta["raw_query"] = user_content
+
     if user_content.lstrip().startswith("["):
         repo_name = detect_repo(messages)
         if repo_name and _FILE_WRITE_PATTERN.search(user_content):
@@ -339,17 +436,22 @@ def enrich_messages(messages: list) -> list:
             print(f"[proxy] file write detected — verification scheduled for {repo_name}")
         else:
             print("[proxy] skipping enrichment — Cline internal message")
-        return messages
+        meta["enriched_message"] = user_content
+        return messages, meta
 
     match = re.search(r'\b(?:read|edit|update|fix|change|look at|in)\s+src/[\w./\-]+\.\w+', user_content, re.IGNORECASE)
     if match:
         print(f"[proxy] skipping enrichment — explicit file reference: {match.group()}")
-        return messages
+        meta["enriched_message"] = user_content
+        return messages, meta
 
     repo_name = detect_repo(messages)
     if repo_name is None:
         print("[proxy] no repo detected in conversation, skipping enrichment")
-        return messages
+        meta["enriched_message"] = user_content
+        return messages, meta
+
+    meta["repo"] = repo_name
 
     chunks = hybrid_search(user_content, repo_name)
 
@@ -372,22 +474,35 @@ def enrich_messages(messages: list) -> list:
         print(f"[proxy] injecting skeleton={skeleton is not None}, chunks={bool(chunks)}, verify={pending_verify is not None} for: {user_content[:80]}")
         messages = list(messages)
         messages[last_user_idx] = {**messages[last_user_idx], "content": enriched_content}
+        meta.update({
+            "enriched_message": enriched_content,
+            "skeleton_injected": skeleton is not None,
+            "chunks_injected": bool(chunks),
+            "verify_injected": pending_verify is not None,
+        })
     else:
         print(f"[proxy] no context found in {repo_name} for: {user_content[:80]}")
+        meta["enriched_message"] = user_content
 
-    return messages
+    return messages, meta
 
 
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
+    import time
+    start = time.monotonic()
+
     body = await request.json()
-    body["messages"] = enrich_messages(body.get("messages", []))
+    body["messages"], enrich_meta = enrich_messages(body.get("messages", []))
 
     stream = body.get("stream", False)
 
     if stream:
+        log_id = _log_prompt(enrich_meta, body["messages"], finish_reason=None)
+        response_chunks: list[bytes] = []
+
         def generate():
             with _http_client.stream(
                 "POST",
@@ -396,22 +511,29 @@ async def chat_completions(request: Request):
                 timeout=120.0,
             ) as r:
                 for chunk in r.iter_bytes():
+                    response_chunks.append(chunk)
                     yield chunk
+            latency_ms = int((time.monotonic() - start) * 1000)
+            response_text = _extract_streaming_text(response_chunks)
+            _update_log_response(log_id, response_text, finish_reason=None, latency_ms=latency_ms)
 
         return StreamingResponse(generate(), media_type="text/event-stream")
     else:
         response = _http_client.post(f"{LLM_URL}/v1/chat/completions", json=body)
+        latency_ms = int((time.monotonic() - start) * 1000)
         data = response.json()
         choices = data.get("choices", [])
         msg = choices[0].get("message", {}) if choices else {}
         finish = choices[0].get("finish_reason") if choices else None
         tool_calls = msg.get("tool_calls")
-        content = msg.get("content")
+        content = msg.get("content", "")
         print(f"[proxy] LLM response: status={response.status_code} finish={finish} content={bool(content)} tool_calls={bool(tool_calls)}")
         if tool_calls:
             print(f"[proxy] tool_calls present: {str(tool_calls)[:300]}")
         if not choices or not content:
             print(f"[proxy] WARNING: unexpected LLM response: {str(data)[:500]}")
+        log_id = _log_prompt(enrich_meta, body["messages"], finish_reason=finish)
+        _update_log_response(log_id, content, finish, latency_ms)
         return JSONResponse(content=data, status_code=response.status_code)
 
 

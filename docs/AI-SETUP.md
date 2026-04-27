@@ -106,6 +106,58 @@ The proxy also runs a **file watcher** (watchdog) over all repos under `REPO_ROO
 
 **Multi-repo support:** the proxy watches all repos under `REPO_ROOT` and detects the active repo from the conversation context automatically. No configuration change is needed when starting a new project.
 
+### Proxy — Request Logging
+
+Every request and response is logged to a SQLite database at `/mnt/storage/prompt_log.db`. The schema captures:
+
+| Column | Description |
+|---|---|
+| `id` | Auto-increment primary key |
+| `timestamp` | UTC timestamp of the request |
+| `repo` | Detected repo name (null if not detected) |
+| `raw_query` | The original user message before enrichment |
+| `enriched_message` | The message after skeleton/chunk injection |
+| `full_messages` | Full message array sent to the LLM (JSON) |
+| `skeleton_injected` | 1 if the codebase skeleton map was injected |
+| `chunks_injected` | 1 if ChromaDB code chunks were injected |
+| `verify_injected` | 1 if a verification result was injected |
+| `finish_reason` | LLM finish reason (`stop`, `length`, etc.) |
+| `response_text` | The LLM's response text |
+| `latency_ms` | End-to-end latency in milliseconds |
+| `model` | Model name returned by the LLM server |
+
+The `model` field identifies which LLM handled the request — useful when switching between machines or models. The database is append-only from the proxy side; the LLM Monitor frontend opens it read-only.
+
+The schema is self-migrating: missing columns are added automatically on proxy startup via `ALTER TABLE`, so the DB survives proxy upgrades without manual intervention.
+
+### LLM Monitor — Prompt Inspection UI
+
+A Next.js web app at `stoodleyweather/frontend-llmmonitor/` provides a browser UI for inspecting the prompt log.
+
+**Start it:**
+```bash
+cd /home/roy/mcp-context/repos/stoodleyweather/frontend-llmmonitor
+npm run dev
+# opens at http://localhost:3000
+```
+
+**What it shows:**
+
+- Paginated table of all logged prompts (25 per page), newest first
+- Per-row columns: ID, time, repo badge, model badge, query preview, context badges (skel/chunks/verify), message size, latency, finish reason
+- Click any row to expand an inline two-panel view — **Input** (blue) shows the raw or enriched prompt, **Output** (green) shows the LLM response
+- Toggle button to switch between the original query and the enriched message (when they differ)
+- **Delete All** button in the header — opens a confirmation modal before deleting
+- **Per-row delete** — two-stage: first click turns the button red and shows "Sure?", second click deletes; clicking away cancels
+
+**Architecture:**
+
+- `lib/db.ts` — reads `/mnt/storage/prompt_log.db` directly via `better-sqlite3` (readonly)
+- `app/api/prompts/route.ts` — GET (list + paginate), DELETE (delete all)
+- `app/api/prompts/[id]/route.ts` — GET (detail), DELETE (single row)
+- `app/page.tsx` — main table page with inline expansion
+- `app/prompts/[id]/page.tsx` — standalone detail page (navigable via direct URL)
+
 ### Semantic Search / RAG
 Context enrichment now happens automatically via the proxy on every Cline request. The `semantic_search` MCP tool is still available but rarely needed — the proxy handles enrichment transparently.
 
@@ -318,7 +370,7 @@ The folder contains:
 | File | Purpose |
 |---|---|
 | `config.py` | All configuration constants — edit this to match your machine |
-| `proxy.py` | LLM proxy — context enrichment, file watcher |
+| `proxy.py` | LLM proxy — context enrichment, file watcher, request/response logging |
 | `server.py` | MCP context-engine server — includes `verify_project` tool |
 | `docs_server.py` | MCP docs-engine server |
 | `verify.py` | Stack auto-detection and check runner used by `verify_project` — handles monorepos where `package.json` lives in a subdirectory |
