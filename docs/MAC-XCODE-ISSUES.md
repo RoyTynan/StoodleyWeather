@@ -99,21 +99,27 @@ If you use a different root path, update `REPO_ROOT` in `config.py` to match bef
 
 Location: `~/dev/mcp-tools/`
 
-The Mac-specific versions of all Python scripts are in [_python-files-xcode/](../_python-files-xcode/) in this repo. Copy the contents of that folder to `~/dev/mcp-tools/` on the Mac and run `uv sync`.
+All Python scripts are in [_python-files/](../_python-files/) in this repo. Copy the contents of that folder to `~/dev/mcp-tools/` on the Mac and run `uv sync`.
 
-| File | Purpose |
+After copying, edit `config.py` for the Mac environment — see the section below.
+
+### config.py — Mac values
+
+| Setting | Mac value |
 |---|---|
-| [`config.py`](../_python-files-xcode/config.py) | All paths and endpoints. Edit here if anything moves. **See note below.** |
-| [`proxy.py`](../_python-files-xcode/proxy.py) | FastAPI proxy on port 8000. Intercepts Cline's LLM requests, injects RAG context (hybrid BM25 + vector search via RRF), forwards to i9. |
-| [`server.py`](../_python-files-xcode/server.py) | stdio MCP server. Provides `semantic_search`, `read_repo_file`, `list_repos`, `search_official_docs`, `verify_project` tools to Cline. |
-| [`verify.py`](../_python-files-xcode/verify.py) | Stack auto-detection and check runner used by `verify_project`. |
-| [`index_repos.py`](../_python-files-xcode/index_repos.py) | Indexes source repos into local ChromaDB. Run manually after large changes. |
-| [`index_docs.py`](../_python-files-xcode/index_docs.py) | Indexes documentation libraries into ChromaDB. |
-| [`docs_server.py`](../_python-files-xcode/docs_server.py) | stdio MCP server for documentation search. |
+| `REPO_ROOT` | `/Users/yourname/dev/v4` |
+| `CHROMA_DIR` | `/Users/yourname/dev/mcp-tools/chromadb_data` |
+| `DOCS_ROOT` | `/Users/yourname/dev/mcp-tools/docs` |
+| `TOOLS_DIR` | `/Users/yourname/dev/mcp-tools` |
+| `EMBED_URL` | `http://127.0.0.1:11434/api/embeddings` (Ollama, not llama-embed) |
+| `INDEXABLE_EXTENSIONS` | Remove `.py`, `.cpp`, `.h`, `.c` if not needed |
+| `EXCLUDED_DIRS` | Add `"ios"`, `"android"`, `"Pods"`, `".expo"` |
+
+Remove the `EMBED_QUERY_PREFIX` and `EMBED_PASSAGE_PREFIX` lines — Ollama does not use bge-m3 prefixes.
 
 ### config.py — DOCS_SOURCES
 
-The `DOCS_SOURCES` constant in [`config.py`](../_python-files-xcode/config.py) is project-specific. The version in `_python-files-xcode/` is configured for this project (typescript, react-native, expo, skia). If you are setting this up for a different project you will need to update `DOCS_SOURCES` to match the documentation libraries you have downloaded and indexed.
+Update `DOCS_SOURCES` to match the documentation libraries you have downloaded for this project. The i7 version is configured for `nextjs` and `react`. The v4visuals Mac version uses `typescript`, `react-native`, `expo`, `skia`, `webgl`, `glsl`, and `webgl2-types`.
 
 See [ADDING-DOCS.md](ADDING-DOCS.md) for the full process of downloading, indexing, and registering each library.
 
