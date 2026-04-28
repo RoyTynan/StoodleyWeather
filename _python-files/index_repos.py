@@ -1,6 +1,8 @@
 import os
+import re
 import sys
 import json
+import sqlite3
 import hashlib
 import argparse
 import fnmatch
@@ -11,6 +13,7 @@ from config import (
     REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_PASSAGE_PREFIX,
     INDEXABLE_EXTENSIONS, EXCLUDED_DIRS, EXCLUDED_FILES,
     CHUNK_CHARS, CHUNK_OVERLAP, REPO_MANIFEST_PATH as MANIFEST_PATH,
+    DEP_GRAPH_ENABLED, DEP_GRAPH_DB,
 )
 
 
@@ -161,6 +164,63 @@ def iter_repo_files(repo_path):
             yield abs_path
 
 
+_IMPORT_RE = re.compile(
+    r"""(?:import\s+.*?\s+from\s+|import\s*\(\s*|require\s*\(\s*)['"](\.[^'"]+)['"]""",
+    re.DOTALL,
+)
+
+_DEP_GRAPH_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".py"}
+
+
+def _resolve_import(import_str: str, file_rel: str, repo_path: str) -> str | None:
+    """Resolve a relative import path to a repo-relative file path, or None."""
+    if not import_str.startswith("."):
+        return None
+    file_dir = os.path.dirname(os.path.join(repo_path, file_rel))
+    resolved = os.path.normpath(os.path.join(file_dir, import_str))
+    rel = os.path.relpath(resolved, repo_path).replace(os.sep, "/")
+    if os.path.isfile(resolved):
+        return rel
+    for ext in (".ts", ".tsx", ".js", ".jsx", ".py"):
+        if os.path.isfile(resolved + ext):
+            return rel + ext
+    for ext in (".ts", ".tsx", ".js", ".jsx"):
+        idx = os.path.join(resolved, f"index{ext}")
+        if os.path.isfile(idx):
+            return os.path.relpath(idx, repo_path).replace(os.sep, "/")
+    return None
+
+
+def build_dep_graph(repo_name: str, repo_path: str, file_content_map: dict):
+    """Write import edges for repo_name into dep_graph.db."""
+    conn = sqlite3.connect(DEP_GRAPH_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS edges (
+            repo         TEXT NOT NULL,
+            file         TEXT NOT NULL,
+            imports_file TEXT NOT NULL,
+            PRIMARY KEY (repo, file, imports_file)
+        )
+    """)
+    conn.execute("DELETE FROM edges WHERE repo = ?", (repo_name,))
+    rows = []
+    for rel_path, content in file_content_map.items():
+        if os.path.splitext(rel_path)[1] not in _DEP_GRAPH_EXTENSIONS:
+            continue
+        for m in _IMPORT_RE.finditer(content):
+            resolved = _resolve_import(m.group(1), rel_path, repo_path)
+            if resolved:
+                rows.append((repo_name, rel_path, resolved))
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO edges (repo, file, imports_file) VALUES (?, ?, ?)",
+            rows,
+        )
+    conn.commit()
+    conn.close()
+    print(f"[dep_graph] {len(rows)} import edges for {repo_name}")
+
+
 def index_repo(repo_name, full=False):
     repo_path = os.path.join(REPO_ROOT, repo_name)
     if not os.path.isdir(repo_path):
@@ -178,6 +238,7 @@ def index_repo(repo_name, full=False):
     repo_manifest = manifest.get(repo_name, {})
     seen_paths = set()
     total_chunks = 0
+    file_content_map: dict[str, str] = {}
 
     all_files = list(iter_repo_files(repo_path))
     print(f"Scanning {len(all_files)} files in {repo_name}...")
@@ -187,14 +248,16 @@ def index_repo(repo_name, full=False):
         seen_paths.add(rel_path)
         file_hash = hash_file(file_path)
 
-        if not full and repo_manifest.get(rel_path) == file_hash:
-            continue
-
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
         except Exception as e:
             print(f"  Skip {rel_path}: {e}", file=sys.stderr)
+            continue
+
+        file_content_map[rel_path] = content
+
+        if not full and repo_manifest.get(rel_path) == file_hash:
             continue
 
         if not content.strip():
@@ -244,6 +307,9 @@ def index_repo(repo_name, full=False):
     manifest[repo_name] = repo_manifest
     save_manifest(manifest)
     print(f"Done. {total_chunks} chunks indexed for {repo_name}.")
+
+    if DEP_GRAPH_ENABLED:
+        build_dep_graph(repo_name, repo_path, file_content_map)
 
 
 def main():

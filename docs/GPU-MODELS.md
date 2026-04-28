@@ -103,10 +103,11 @@ The 14B model at Q4_K_M is the recommended choice at this tier — noticeably be
 
 | Model | Quantisation | Approx size | Notes |
 |---|---|---|---|
-| Qwen2.5-Coder-32B-Instruct | Q8_0 | ~34.8GB | Full quality — this is what this repo uses |
+| Qwen3.6-35B-A3B | Q8_0 | ~38GB | MoE — 3B active params, fast inference, 100K context. Current model in this repo — see [LLM-QWEN3.md](LLM-QWEN3.md) |
+| Qwen2.5-Coder-32B-Instruct | Q8_0 | ~34.8GB | Dense — full quality, 65K context |
 | Qwen2.5-Coder-32B-Instruct | Q4_K_M | ~18.5GB | Leaves substantial headroom |
 
-At this tier you can run the 32B model at full Q8_0 with a 65K context window and have room to spare. This is the configuration documented in [AI-SETUP.md](AI-SETUP.md).
+At this tier you can run large models at full Q8_0 with a 65K–100K context window and have room to spare.
 
 ---
 

@@ -20,6 +20,10 @@ Step-by-step installation for the three-machine setup: i9 (LLM), i7 (proxy + emb
 
 ### i9 — LLM model
 
+> **Current model:** Qwen3.6-35B-A3B-Q8_0 (updated April 2026). See [LLM-QWEN3.md](LLM-QWEN3.md) for download and startup details.
+
+The original model used during initial setup:
+
 ```bash
 wget --header="Authorization: Bearer your-huggingface-token" \
     https://huggingface.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-32B-Instruct-Q8_0.gguf \
@@ -74,6 +78,8 @@ cmake --build build --config Release -j$(nproc)
 ```
 
 ### Create start-llm.sh
+
+> **Current config:** see [LLM-QWEN3.md](LLM-QWEN3.md) for the updated startup script for Qwen3.6-35B-A3B.
 
 ```bash
 #!/bin/bash
@@ -206,6 +212,14 @@ Edit `/mnt/storage/mcp-tools/config.py` — this is the only file you need to ch
 | `SKELETON_MAX_FILES` | `60` | Max files in the codebase skeleton map |
 | `CHUNK_CHARS` | `600` | Characters per chunk |
 | `CHUNK_OVERLAP` | `120` | Overlap between chunks |
+| `LLM_HAS_THINKING` | `True` | Set `True` for models with thinking mode (Qwen3, DeepSeek-R1). Disables think blocks in requests and strips `<think>` tags from responses. Set `False` for Qwen2.5, Llama, etc. |
+
+**Dependency graph**
+
+| Constant | Default | Description |
+|---|---|---|
+| `DEP_GRAPH_ENABLED` | `True` | Enable import-edge analysis — injects impact warnings when an edited file is imported by others |
+| `MAX_IMPACT_FILES` | `5` | Maximum dependent files to list per edit |
 
 ### Build the vector index
 
@@ -271,8 +285,8 @@ In VS Code, open the Cline extension settings:
 | API Provider | OpenAI Compatible |
 | Base URL | `http://<i7-ip>:8000/v1` (the proxy — not the i9 directly) |
 | API Key | any value — e.g. `local` |
-| Model | `qwen2.5-coder-32b-instruct-q8_0.gguf` |
-| Context window | 65536 |
+| Model | `Qwen3.6-35B-A3B-Q8_0.gguf` — see [LLM-QWEN3.md](LLM-QWEN3.md) |
+| Context window | `102400` |
 | Max output tokens | 8096 |
 | Native Tool Calling | Off |
 | Parallel Tool Calling | Off |

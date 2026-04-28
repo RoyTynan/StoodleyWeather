@@ -234,6 +234,29 @@ Gemini never needs to see your source files. Claude never needs to research the 
 
 ---
 
+## Dependency Impact Notes
+
+After every file write, the proxy automatically checks which other files import the file that was just edited. If any are found, the LLM's next prompt includes an impact note like this:
+
+```
+Dependency impact: `src/lib/weather-utils.ts` is also imported by:
+  - src/components/WeatherTable.tsx
+  - src/components/SummitConditions.tsx
+```
+
+This tells the LLM where to look for knock-on effects — broken imports, type mismatches, callers that may no longer match the updated signature — without you having to ask. The LLM can then choose to read those files and check them, or flag them in its completion message.
+
+**You do not need to do anything.** The impact note is injected automatically. If the LLM spots a problem in a dependent file it will usually address it in the same task. If it does not, use the impact note as a prompt:
+
+```
+The impact note said SummitConditions.tsx also imports weather-utils.ts.
+Read it and check the windChill call still matches the updated signature.
+```
+
+The impact check is powered by a dependency graph built at index time — `index_repos.py` parses all `import` and `require` statements and stores edges in `dep_graph.db`. It is rebuilt on every index run and kept current by the file watcher. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical details.
+
+---
+
 ## Why Prompts Succeed or Fail
 
 **"Read and understand the entire project"** — a common failure. The model starts reading files one by one via `read_file`, fills the context window, and hits a HALT. The proxy cannot help because the prompt contains file paths.

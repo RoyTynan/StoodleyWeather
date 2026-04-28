@@ -2,3 +2,6 @@
 
 # Documentation — markdown files, not source code
 docs/
+
+# Proxy/MCP infrastructure — not part of the weather app
+_python-files/

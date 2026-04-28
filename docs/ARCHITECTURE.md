@@ -44,9 +44,9 @@ Alongside this, Cline connects directly to two MCP servers on the i7:
 
 1. Scans the conversation history to detect which repo is being worked on
 2. Runs a hybrid search to find the most relevant code chunks from ChromaDB
-3. Injects a codebase skeleton map and the top-ranked chunks into the prompt
+3. Injects a codebase skeleton map, code chunks, and any pending verify/impact results into the prompt
 4. Forwards the enriched prompt to the i9 LLM
-5. Captures the response, latency, and token counts and logs everything to SQLite
+5. Captures the response, strips thinking blocks if `LLM_HAS_THINKING` is set, logs everything to SQLite
 
 **Enrichment is skipped when:**
 - The message starts with `[` — it's a Cline internal tool result, not a user prompt
@@ -76,13 +76,35 @@ This gives the LLM the full codebase structure upfront cheaply, without reading 
 
 ### HALT Detection
 
-When the LLM returns an empty or unparsable response — typically caused by context window saturation — the proxy:
+When the LLM returns an empty response — typically caused by context window saturation — the proxy:
 
 1. Logs the step as `HALT` in the prompt database
-2. Returns a valid Cline `attempt_completion` response with a message telling the user the query was too large and to start a new task with a more focused prompt
+2. Returns a valid Cline `attempt_completion` response telling the user the query was too large and to start a new task with a more focused prompt
 3. Blocks the next retry for the same task — so Cline cannot spiral into repeated failed requests
 
 This stops the retry death spiral: each retry would resend the full conversation history, making context saturation worse with every attempt.
+
+### LLM-Down Detection
+
+Connection errors to the LLM server (`httpx.ConnectError`) are handled separately from context saturation:
+
+- Logged as `ERROR` step type (not `HALT`)
+- Cline receives an `attempt_completion` message: *"The LLM server is not reachable — start the LLM on the i9 and retry"*
+- The next request is **not** blocked — when the LLM comes back up, Cline can retry normally
+
+Any other unexpected exception is also logged as `ERROR` with the full exception type and message persisted to the database.
+
+### Thinking Mode
+
+Some models (Qwen3, DeepSeek-R1) output `<think>...</think>` blocks before tool calls. Cline's XML tool call parser cannot handle these — it sees `<think>` as an unknown tool and fails.
+
+When `LLM_HAS_THINKING = True` in `config.py`, the proxy:
+
+1. Adds `"enable_thinking": false` to every request body sent to the LLM — disabling think blocks at the model level
+2. Strips any `<think>...</think>` blocks from the response as a safety net before passing content to Cline
+3. After stripping, re-checks whether the response is empty — so HALT still fires correctly if think blocks were the only content
+
+Set `LLM_HAS_THINKING = False` when using models that do not have a thinking mode (Qwen2.5, Llama, etc.).
 
 ### File Watcher
 
@@ -92,11 +114,37 @@ After a file write is detected (via Cline's `write_to_file` / `replace_in_file` 
 
 **inotify limit:** The file watcher requires a higher inotify watch limit than the Ubuntu default. See [SETUP.md](SETUP.md) for the sysctl command.
 
+### Dependency Graph
+
+At index time, `index_repos.py` parses `import` and `require` statements from all `.ts`, `.tsx`, `.js`, `.jsx`, and `.py` files and writes import edges to a SQLite database (`dep_graph.db`):
+
+```
+repo          file                              imports_file
+stoodleyweather  src/components/WeatherTable.tsx  src/lib/weather-utils.ts
+stoodleyweather  src/components/SummitConditions.tsx  src/lib/weather-utils.ts
+```
+
+When the proxy detects a file write, it queries `dep_graph.db` for files that import the edited file. If any are found, an **impact note** is injected into the next prompt:
+
+```
+Dependency impact: `src/lib/weather-utils.ts` is also imported by:
+  - src/components/WeatherTable.tsx
+  - src/components/SummitConditions.tsx
+```
+
+This tells the LLM which other files may be affected by its edit — so it can check for type errors or broken calls without being explicitly asked.
+
+`MAX_IMPACT_FILES` caps the list. `DEP_GRAPH_ENABLED = False` disables the feature entirely.
+
 ---
 
-## Prompt Logging
+## SQLite Databases
 
-Every request and response is logged to `/mnt/storage/prompt_log.db` (SQLite). The schema:
+Two SQLite databases are used by the system.
+
+### prompt_log.db
+
+Every request and response is logged to `/mnt/storage/prompt_log.db`. The `prompts` table schema:
 
 | Column | Description |
 |---|---|
@@ -110,7 +158,7 @@ Every request and response is logged to `/mnt/storage/prompt_log.db` (SQLite). T
 | `chunks_injected` | 1 if code chunks were injected |
 | `verify_injected` | 1 if a verify result was injected |
 | `finish_reason` | LLM finish reason |
-| `response_text` | LLM response text |
+| `response_text` | LLM response text (think blocks stripped) |
 | `latency_ms` | End-to-end latency |
 | `model` | Model name returned by the LLM server |
 | `task_id` | UUID grouping all steps of one Cline task |
@@ -121,7 +169,23 @@ Every request and response is logged to `/mnt/storage/prompt_log.db` (SQLite). T
 
 The schema self-migrates on proxy startup — missing columns are added via `ALTER TABLE` so the database survives proxy upgrades without manual intervention.
 
-A `config_snapshots` table records all proxy config values on every startup, timestamped, so you can see what settings were active for any given session.
+A `config_snapshots` table records all proxy config values on every startup, timestamped, so you can see what settings were active for any given session. This includes all tuning constants (`N_CONTEXT_CHUNKS`, `LLM_HAS_THINKING`, `DEP_GRAPH_ENABLED`, etc.).
+
+### dep_graph.db
+
+The dependency graph lives at `/mnt/storage/chromadb/dep_graph.db`. Built by `index_repos.py` on every index run.
+
+**`edges` table:**
+
+| Column | Description |
+|---|---|
+| `repo` | Repo name |
+| `file` | The file that contains the import |
+| `imports_file` | The file being imported (repo-relative path) |
+
+The primary key is `(repo, file, imports_file)`. All edges for a repo are deleted and rebuilt on each full index run — the table always reflects the current state of the codebase.
+
+Relative imports are resolved to canonical repo-relative paths at index time, with extension probing (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`) and index file detection (`index.ts` etc.). External package imports are ignored.
 
 ---
 

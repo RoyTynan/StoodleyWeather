@@ -45,23 +45,30 @@ Click any step to expand it — showing the full enriched message sent to the LL
 |---|---|---|
 | `TASK` | Gray | Opening prompt — the user's typed task |
 | `READ` | Dark gray | Cline read a file via `read_repo_file` |
-| `WRITE` | Purple | Cline wrote or edited a file |
+| `WRITE` | Purple | Cline wrote or edited a file. Triggers verify and dependency impact analysis |
 | `CMD` | Yellow | Cline ran a shell command |
-| `ERROR` | Red (dim) | LLM returned an error or invalid response |
-| `HALT` | Red (bright) | Context saturation — proxy terminated the task |
+| `ERROR` | Red (dim) | LLM connection error or unexpected exception — full error message logged |
+| `HALT` | Red (bright) | Context saturation — proxy terminated the task and blocked retries |
 | `DONE` | Teal | Task completed successfully (`attempt_completion`) |
 | `FOLLOWUP` | Orange | User follow-up within the same task |
 | `TOOL` | Dark gray | MCP tool call (semantic search, verify, etc.) |
 | `PROMPT` | Blue | Other prompt not matching a specific category |
 
+The step type legend at the top of the page is interactive — click any badge to see a description of what that step type means. Click again to close, or click a different badge to switch.
+
+### ERROR vs HALT
+
+- `ERROR` — the LLM server was unreachable (`Connection refused`) or returned an unexpected exception. The next request is not blocked — retrying after the LLM is restarted will work.
+- `HALT` — the LLM returned an empty response (context saturation). The next request for the same task is blocked. Start a new Cline task with a more focused prompt.
+
 ---
 
 ## HALT Steps
 
-A `HALT` step (bright red) means the LLM returned an empty or unparsable response — typically caused by context window saturation. When this happens the proxy:
+A `HALT` step (bright red) means the LLM returned an empty response — typically caused by context window saturation. When this happens the proxy:
 
 1. Logs the step as `HALT`
-2. Returns a `attempt_completion` response to Cline telling the user the query was too large
+2. Returns an `attempt_completion` response to Cline telling the user the query was too large
 3. Blocks any retry for the same task — so Cline cannot spiral into repeated failed requests
 
 If you see a HALT, start a new Cline task with a more focused prompt. Use the codebase skeleton and RAG context to your advantage rather than asking the model to read the entire project.

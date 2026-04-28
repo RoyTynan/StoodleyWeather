@@ -65,6 +65,7 @@ npm install && npm run dev
 | Doc | What it covers |
 |---|---|
 | [SETUP.md](docs/SETUP.md) | Install guide — machines, models, services, first run |
+| [LLM-QWEN3.md](docs/LLM-QWEN3.md) | Qwen3.6-35B-A3B setup — download, start script, VRAM, proxy config |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system works — proxy, RAG, ChromaDB, MCP, file watching |
 | [MONITOR.md](docs/MONITOR.md) | LLM prompt monitor — task audit trail, step types, HALT detection |
 | [WORKFLOW.md](docs/WORKFLOW.md) | Working with Cline — prompt writing, RAG vs read_file, examples |

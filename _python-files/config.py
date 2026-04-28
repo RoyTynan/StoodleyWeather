@@ -33,6 +33,11 @@ EMBED_PASSAGE_PREFIX = "passage: "  # bge-m3 document prefix
 # LLM inference server — runs on the i9 (used by proxy.py only)
 LLM_URL = "http://192.168.178.99:8080"
 
+# Set to True for models that output <think>...</think> blocks (Qwen3, DeepSeek-R1).
+# The proxy strips think blocks before returning to Cline and disables them at the
+# model level via enable_thinking=False in the request body.
+LLM_HAS_THINKING = True
+
 # ===========================================================
 # PROXY (proxy.py)
 # ===========================================================
@@ -79,6 +84,20 @@ DOCS_EXCLUDED_DIRS = {"tr1", "ext", "debug", "backward", "decimal", "profile"}
 # ===========================================================
 # MANIFEST PATHS (index_repos.py, index_docs.py)
 # ===========================================================
+
+# ===========================================================
+# DEPENDENCY GRAPH (index_repos.py, proxy.py)
+# ===========================================================
+
+# Enable import-edge analysis — injects impact warnings when an edited file
+# is imported by other files in the repo
+DEP_GRAPH_ENABLED = True
+
+# Maximum number of dependent files to report per edit
+MAX_IMPACT_FILES = 5
+
+# Derived — do not edit
+DEP_GRAPH_DB = os.path.join(CHROMA_DIR, "dep_graph.db")
 
 # Derived — do not edit
 REPO_MANIFEST_PATH = os.path.join(CHROMA_DIR, "index_manifest.json")
