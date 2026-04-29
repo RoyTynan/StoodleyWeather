@@ -192,7 +192,7 @@ Edit `/mnt/storage/mcp-tools/config.py` — this is the only file you need to ch
 
 | Constant | Default | Description |
 |---|---|---|
-| `REPO_ROOT` | `/home/roy/mcp-context/repos` | Where all project repos are checked out |
+| `REPO_ROOT` | `/mnt/storage/repos` | Where all project repos are checked out |
 | `CHROMA_DIR` | `/mnt/storage/chromadb` | Where ChromaDB persists its index |
 | `DOCS_ROOT` | `/mnt/storage/docs/frameworks` | Root for documentation libraries |
 | `TOOLS_DIR` | `/mnt/storage/mcp-tools` | Path to this directory |
@@ -237,7 +237,26 @@ cd /mnt/storage/mcp-tools
 .venv/bin/python index_docs.py --lib typescript
 ```
 
-### Start the proxy
+### SQLite databases
+
+Two SQLite databases are created automatically — no manual setup needed:
+
+| Database | Location | Created by |
+|---|---|---|
+| `prompt_log.db` | `/mnt/storage/prompt_log.db` | `proxy.py` on first startup |
+| `dep_graph.db` | `/mnt/storage/chromadb/dep_graph.db` | `index_repos.py` on first index run |
+
+`prompt_log.db` records every prompt and response — used by the LLM monitor frontend. `dep_graph.db` stores import edges for dependency impact analysis. Both use `CREATE TABLE IF NOT EXISTS` and self-migrate on startup, so they survive proxy upgrades without manual intervention. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full schema.
+
+### Start the proxy and monitor
+
+```bash
+bash /mnt/storage/mcp-tools/start-all.sh
+```
+
+This starts both the proxy (`proxy.py`) and the LLM monitor frontend (Next.js dev server on port 3333). The monitor frontend lives in `/mnt/storage/repos/stoodleyweather/frontend-llmmonitor` — `start-all.sh` has this path hardcoded, so if the stoodleyweather repo moves, update line 13 of that script.
+
+To start the proxy only:
 
 ```bash
 bash /mnt/storage/mcp-tools/start-proxy.sh
@@ -340,7 +359,7 @@ bash /home/yourusername/start-llm.sh
 
 **i7:**
 ```bash
-bash /mnt/storage/mcp-tools/start-proxy.sh
+bash /mnt/storage/mcp-tools/start-all.sh
 ```
 
 `llama-embed` starts automatically via systemd. Open VS Code — Cline starts both MCP servers automatically.

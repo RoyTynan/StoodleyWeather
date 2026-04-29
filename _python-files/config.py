@@ -10,7 +10,7 @@ import os
 # ===========================================================
 
 # Root directory where all project repos are checked out
-REPO_ROOT = "/home/roy/mcp-context/repos"
+REPO_ROOT = "/mnt/storage/repos"
 
 # Where ChromaDB persists its vector index
 CHROMA_DIR = "/mnt/storage/chromadb"
@@ -119,6 +119,10 @@ DOCS_SOURCES = {
     ],
     "react": [
         os.path.join(DOCS_ROOT, "react-docs/src/content"),
+    ],
+    "cesium": [
+        os.path.join(DOCS_ROOT, "cesium/node_modules/cesium/Source/Cesium.d.ts"),
+        os.path.join(DOCS_ROOT, "cesium/node_modules/cesium/README.md"),
     ],
 }
 

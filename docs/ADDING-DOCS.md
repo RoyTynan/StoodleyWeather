@@ -4,7 +4,7 @@ This document covers how to add a new documentation library to the local AI setu
 
 Three libraries are documented here: React, TypeScript, and Next.js.
 
-> **Path convention:** This document uses `/mnt/storage/` as the base storage path and `/mnt/storage/mcp-tools/` as the MCP tools directory. These match the layout described in [AI-SETUP.md](AI-SETUP.md). Replace them with wherever you have placed these directories on your own machine.
+> **Path convention:** This document uses `/mnt/storage/` as the base storage path and `/mnt/storage/mcp-tools/` as the MCP tools directory. These match the layout described in [SETUP.md](SETUP.md). Replace them with wherever you have placed these directories on your own machine.
 
 ---
 
@@ -200,15 +200,87 @@ After updating `docs_server.py`, reload VS Code so Cline restarts the MCP server
 
 ---
 
+## CesiumJS
+
+CesiumJS docs are indexed from the TypeScript type declarations bundled with the `cesium` npm package — not from a Markdown source. This gives the model access to the full API surface (classes, methods, properties, signatures).
+
+### 1. Install the cesium package
+
+```bash
+mkdir -p /mnt/storage/docs/frameworks/cesium
+cd /mnt/storage/docs/frameworks/cesium
+npm init -y
+npm install cesium
+```
+
+This places `Cesium.d.ts` at `node_modules/cesium/Source/Cesium.d.ts`.
+
+### 2. Add to `config.py`
+
+In `DOCS_SOURCES`, add:
+
+```python
+"cesium": [
+    "/mnt/storage/docs/frameworks/cesium/node_modules/cesium/Source/Cesium.d.ts",
+    "/mnt/storage/docs/frameworks/cesium/node_modules/cesium/README.md",
+],
+```
+
+### 3. Run the indexer
+
+```bash
+cd /mnt/storage/mcp-tools
+.venv/bin/python index_docs.py --lib cesium
+```
+
+This creates the ChromaDB collection `docs_cesium`.
+
+### 4. Wire up in `docs_server.py`
+
+Add the alias to `LIBRARY_ALIASES`:
+
+```python
+"cesium": "docs_cesium",
+"cesiumjs": "docs_cesium",
+```
+
+The `search_docs` tool picks this up automatically. A dedicated `search_cesium_docs` tool is also available for direct targeted queries.
+
+### 5. Clinerules
+
+In `.clinerules/search.md`, add to the tool reference table:
+
+```
+| `search_cesium_docs` | CesiumJS API — classes, methods, properties, 3D globe, terrain, cameras |
+```
+
+And in the server-to-tool mapping:
+
+```
+| `search_cesium_docs` | `docs-engine` |
+```
+
+---
+
 ## General Pattern
 
-Every new ChromaDB documentation library follows the same five steps:
+Every new ChromaDB documentation library follows the same steps:
 
-1. **Download** — sparse clone or full clone to `/mnt/storage/docs/frameworks/<name>-docs/`
-2. **Add to `DOCS_SOURCES`** in `index_docs.py` — map the library name to its file paths
+1. **Download** — sparse clone, full clone, or npm install to `/mnt/storage/docs/frameworks/<name>/`
+2. **Add to `DOCS_SOURCES`** in `config.py` — map the library name to its file paths
 3. **Run indexer** — `python index_docs.py --lib <name>` — creates `docs_<name>` collection
-4. **Add tool** to `docs_server.py` — copy an existing tool, change the collection name and docstring
+4. **Wire up in `docs_server.py`** — add aliases to `LIBRARY_ALIASES` and ensure the collection name appears in `ALL_COLLECTIONS`. The `search_docs` unified tool then covers it automatically. Add a dedicated `search_<name>_docs` tool only if you want an explicit per-library entry point.
 5. **Update clinerules** — add the tool to the search.md reference table and server mapping
+
+### `search_docs` — unified search
+
+`search_docs` is the primary docs tool. It parses the query for a library name and routes accordingly:
+
+- `"search cesium for camera fly-to"` — searches `docs_cesium` only
+- `"search docs for async rendering"` — searches all collections, filters to score ≥ 0.75
+- Aliases: `ts` → TypeScript, `next` → Next.js, `cesiumjs` → Cesium
+
+When adding a new library, registering it in `LIBRARY_ALIASES` is all that is needed for `search_docs` to target it by name.
 
 To update docs after pulling new source:
 

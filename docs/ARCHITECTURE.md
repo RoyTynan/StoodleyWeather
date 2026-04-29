@@ -244,9 +244,14 @@ Two FastMCP servers run on the i7. Cline launches them automatically via SSH whe
 
 | Tool | What it does |
 |---|---|
-| `search_nextjs_docs` | Semantic search over Next.js documentation |
-| `search_react_docs` | Semantic search over React documentation |
+| `search_docs` | Unified semantic search across all indexed documentation libraries |
 | `search_typescript_docs` | Semantic search over TypeScript documentation |
+| `search_nextjs_docs` | Semantic search over Next.js documentation |
+| `search_cesium_docs` | Semantic search over CesiumJS API type declarations |
+
+`search_docs` is the primary tool. It parses natural language to detect a target library — `"search cesium for camera controls"` targets only `docs_cesium`; `"search docs for routing"` searches all collections and filters results to a relevance score above 0.75 to avoid hallucination. Library name aliases (`ts`, `next`, `cesiumjs` etc.) are resolved via a `LIBRARY_ALIASES` dict in `docs_server.py`.
+
+The per-library tools (`search_typescript_docs` etc.) remain available for direct targeted queries.
 
 Two servers rather than one keeps the tool list per server short, which reduces the system prompt length and makes it easier for the model to generate correctly formatted tool calls.
 
