@@ -46,7 +46,8 @@ Alongside this, Cline connects directly to two MCP servers on the i7:
 2. Runs a hybrid search to find the most relevant code chunks from ChromaDB
 3. Injects a codebase skeleton map, code chunks, and any pending verify/impact results into the prompt
 4. Forwards the enriched prompt to the i9 LLM
-5. Captures the response, strips thinking blocks if `LLM_HAS_THINKING` is set, logs everything to SQLite
+5. **Buffers the full response** before returning it to Cline — this allows the proxy to inspect and modify the response before Cline sees it
+6. Strips thinking blocks if `LLM_HAS_THINKING` is set, wraps plain-text responses if needed, logs everything to SQLite
 
 **Enrichment is skipped when:**
 - The message starts with `[` — it's a Cline internal tool result, not a user prompt
@@ -74,13 +75,23 @@ src/lib/weather-utils.ts → formatTemperature, windChill, celsiusToFahrenheit
 
 This gives the LLM the full codebase structure upfront cheaply, without reading every file. It is injected before the code chunks on every enriched request.
 
+### Response Buffering and Plain-Text Wrapping
+
+The proxy buffers the complete LLM response before forwarding it to Cline. This makes two interventions possible:
+
+**Plain-text wrapping** — if the LLM responds with `finish_reason=stop` and no Cline tool tag in the output (detected via `_TOOL_TAG_RE`, which matches `<attempt_completion>`, `<read_file>`, `<use_mcp_tool>` etc.), the proxy wraps the response in `<attempt_completion>` before Cline sees it. This prevents the "you did not use a tool" retry loop that occurs when the model answers in plain text. HTML or code snippets in the response are not mistaken for tool tags because the regex matches known Cline tool names specifically.
+
+**DONE detection** — when the LLM response contains `<attempt_completion>`, the step is logged with `step_type=DONE` regardless of what Cline's incoming message type was. This ensures task completions are correctly visible in the monitor.
+
 ### HALT Detection
 
-When the LLM returns an empty response — typically caused by context window saturation — the proxy:
+HALT fires when the LLM returns an empty response or `finish_reason=length` (output cut short at the token limit — the primary signal for context saturation). The proxy:
 
 1. Logs the step as `HALT` in the prompt database
 2. Returns a valid Cline `attempt_completion` response telling the user the query was too large and to start a new task with a more focused prompt
 3. Blocks the next retry for the same task — so Cline cannot spiral into repeated failed requests
+
+`finish_reason=length` is captured from the SSE stream and is a more reliable saturation signal than an empty response, which can occur for other reasons.
 
 This stops the retry death spiral: each retry would resend the full conversation history, making context saturation worse with every attempt.
 
@@ -199,6 +210,16 @@ An open-source Python-native vector database. Stores embeddings of all source fi
 - **Chunk size:** 600 characters with 120-character overlap (source); 800/120 (docs)
 
 Each chunk is stored with metadata: `file_path`, `start_line`, `end_line`, `repo`.
+
+### Index Freshness
+
+`index_repos.py` uses a SHA-256 manifest to track the state of every indexed file. On each run:
+
+- **Unchanged files** — skipped (hash matches manifest)
+- **Changed files** — old chunks deleted from ChromaDB, new chunks embedded and inserted
+- **Deleted files** — removed from ChromaDB and the manifest
+
+The index always reflects the current state of the codebase. No stale chunks remain after a file is edited or deleted. The manifest is saved after each file so progress is preserved if the indexer is interrupted.
 
 ### .chromaignore
 

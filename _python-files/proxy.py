@@ -292,6 +292,17 @@ def _llm_down_sse_chunks(url: str):
     yield b"data: [DONE]\n\n"
 
 
+def _wrap_as_sse_chunks(text: str, model: str | None):
+    """Emit plain text as a single SSE chunk — used when the LLM forgot to use a tool."""
+    payload = json.dumps({
+        "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": "stop"}],
+        "model": model or "proxy",
+    })
+    yield f"data: {payload}\n\n".encode()
+    yield b"data: [DONE]\n\n"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _init_db()
@@ -383,6 +394,14 @@ def _get_impact(repo_name: str, edited_file: str) -> str | None:
 # Strip Qwen3 thinking blocks before returning content to Cline
 _THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
 
+# Detects a Cline tool call in an LLM response — used to decide whether wrapping is needed.
+# Matches the opening tag of any known Cline or MCP tool.
+_TOOL_TAG_RE = re.compile(
+    r'<(attempt_completion|read_file|write_to_file|replace_in_file|insert_content_at_line'
+    r'|execute_command|ask_followup_question|search_files|list_files'
+    r'|use_mcp_tool|access_mcp_resource)\b'
+)
+
 # Task and step detection
 _TASK_TAG = re.compile(r'<task>(.*?)</task>', re.DOTALL)
 _WRITE_STEP = re.compile(r'^\[\s*(?:write_to_file|replace_in_file|create_file)\b', re.IGNORECASE)
@@ -413,6 +432,8 @@ def _detect_step(content: str) -> tuple[str, str | None, str | None]:
     if s.startswith('[execute_command'):
         return 'CMD', task_id, None
     if s.startswith('[ERROR]'):
+        if 'did not use a tool' in s:
+            return 'TOOL', task_id, None
         return 'ERROR', task_id, None
     if s.startswith('[attempt_completion]'):
         return 'DONE', task_id, None
@@ -788,6 +809,9 @@ async def chat_completions(request: Request):
         def generate():
             llm_down = False
             stream_exc: Exception | None = None
+
+            # Buffer the full response before emitting — allows wrapping plain-text
+            # responses in attempt_completion before Cline sees them.
             try:
                 with _http_client.stream(
                     "POST",
@@ -797,30 +821,40 @@ async def chat_completions(request: Request):
                 ) as r:
                     for chunk in r.iter_bytes():
                         response_chunks.append(chunk)
-                        yield chunk
             except httpx.ConnectError:
                 llm_down = True
             except Exception as exc:
                 stream_exc = exc
                 print(f"[proxy] streaming LLM error: {exc}")
-            finally:
-                latency_ms = int((time.monotonic() - start) * 1000)
-                response_text, finish_reason, model, prompt_tokens, completion_tokens = _extract_streaming_response(response_chunks)
-                if LLM_HAS_THINKING:
-                    response_text = _THINK_RE.sub("", response_text).strip()
-                if llm_down:
-                    _do_llm_down(log_id, latency_ms)
-                elif stream_exc is not None:
-                    err_msg = f"[PROXY ERROR] {type(stream_exc).__name__}: {stream_exc}"
-                    _update_log_response(log_id, err_msg, "error", latency_ms, step_type_override="ERROR")
-                elif not response_text or finish_reason == "length":
-                    _do_halt(log_id, latency_ms, task_id)
-                else:
-                    _update_log_response(log_id, response_text, finish_reason=finish_reason,
-                                         latency_ms=latency_ms, model=model,
-                                         prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+
+            latency_ms = int((time.monotonic() - start) * 1000)
+            response_text, finish_reason, model, prompt_tokens, completion_tokens = _extract_streaming_response(response_chunks)
+            if LLM_HAS_THINKING:
+                response_text = _THINK_RE.sub("", response_text).strip()
+
             if llm_down:
+                _do_llm_down(log_id, latency_ms)
                 yield from _llm_down_sse_chunks(LLM_URL)
+            elif stream_exc is not None:
+                err_msg = f"[PROXY ERROR] {type(stream_exc).__name__}: {stream_exc}"
+                _update_log_response(log_id, err_msg, "error", latency_ms, step_type_override="ERROR")
+            elif not response_text or finish_reason == "length":
+                _do_halt(log_id, latency_ms, task_id)
+            elif finish_reason == "stop" and not _TOOL_TAG_RE.search(response_text):
+                wrapped = f"<attempt_completion>\n<result>\n{response_text}\n</result>\n</attempt_completion>"
+                print(f"[proxy] wrapping plain-text response in attempt_completion")
+                _update_log_response(log_id, wrapped, finish_reason="stop",
+                                     latency_ms=latency_ms, model=model,
+                                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                                     step_type_override="DONE")
+                yield from _wrap_as_sse_chunks(wrapped, model)
+            else:
+                step_override = "DONE" if "<attempt_completion>" in response_text else None
+                _update_log_response(log_id, response_text, finish_reason=finish_reason,
+                                     latency_ms=latency_ms, model=model,
+                                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                                     step_type_override=step_override)
+                yield from response_chunks
 
         return StreamingResponse(generate(), media_type="text/event-stream")
     else:

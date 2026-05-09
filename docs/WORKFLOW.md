@@ -143,12 +143,22 @@ Read src/lib/weather-utils.ts and src/components/SummitConditions.tsx in stoodle
 
 ## Clinerules
 
-Each repo has a `.clinerules/` directory that tells Cline how to behave. Rules are split into two files so they can be reused across projects:
+Each repo has a `.clinerules/` directory that tells Cline how to behave. Files in `.clinerules/` are stacked — Cline reads all of them on every task.
 
-- **`.clinerules.md`** — generic rules for any project. Covers assumption surfacing (state interpretation before coding), minimal footprint (no speculative abstractions or extra dependencies), surgical changes (only touch code related to the request), and git behaviour.
-- **`.clinerules-typescript.md`** — TypeScript and React-specific rules. Add alongside the generic file for TS projects.
+This repo uses:
 
-Cline reads all files in `.clinerules/` and stacks them. For a new project, copy both relevant files from this repo.
+- **`behaviour.md`** — core behavioural rules covering response length, file editing discipline, terminal command restrictions, and follow-up question rules
+- **`search.md`** — MCP tool reference: which tools are available and when to use them
+
+**Key rules in `behaviour.md`:**
+
+- Do not run `tsc`, `npx`, or any compiler/build command to investigate or diagnose code — the proxy runs type checks automatically after file writes via `verify.py`
+- If a bug cannot be found by reading the code, say so in `attempt_completion` and stop — do not fall back to running diagnostic commands
+- Never use `ask_followup_question` if the answer can be found by reading the files — read first, then answer and complete
+- Do not edit any file unless the user explicitly uses the word "edit", "change", "fix", or "update"
+- If a task touches more than one file, state the plan and wait for confirmation before writing anything
+
+For a new project, copy both files from this repo's `.clinerules/` directory.
 
 ---
 

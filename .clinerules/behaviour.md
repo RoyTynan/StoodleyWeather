@@ -14,14 +14,23 @@ After completing a task, respond with ONE short confirmation line only. Example:
 
 For read or search tasks (no file edits), answer the question in one or two sentences then call `attempt_completion` once with the answer as the result. Do NOT call `attempt_completion` more than once.
 
+## Asking Follow-up Questions — CRITICAL RULE
+- NEVER use `ask_followup_question` if the answer can be found by reading the code or files.
+- NEVER ask the user to clarify what error they are seeing if you can read the relevant file yourself.
+- If you have read the relevant files and found no issue, state that clearly in `attempt_completion` and stop.
+- Only use `ask_followup_question` when the task cannot proceed without information that is genuinely unavailable in the codebase.
+
 ## Editing Files
 - Do NOT edit any file unless the user explicitly uses the word "edit", "change", "fix", or "update".
 - A search or lookup result is never a reason to edit a file.
 - If you find a problem in a file (duplicate line, error, etc.) while searching, report it to the user — do NOT fix it unless explicitly asked.
 
-## Running Terminal Commands
+## Running Terminal Commands — CRITICAL RULE
 - Do NOT run any terminal command unless the user explicitly uses the word "run" or "execute".
 - Do NOT run the dev server, compiler, or any build tool unless explicitly asked.
+- NEVER run `tsc`, `npx tsc`, `npx`, or any TypeScript compiler command as part of investigating, diagnosing, or fixing code.
+- The proxy automatically runs type checks after file writes — you do not need to trigger them manually.
+- If you cannot identify a bug by reading the code, tell the user "I cannot find a bug at that location" and stop. Do NOT fall back to running diagnostic commands.
 
 ## Before Creating Files
 - Do not create new files without asking first.
