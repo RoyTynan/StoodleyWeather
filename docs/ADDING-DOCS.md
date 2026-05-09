@@ -200,68 +200,6 @@ After updating `docs_server.py`, reload VS Code so Cline restarts the MCP server
 
 ---
 
-## CesiumJS
-
-CesiumJS docs are indexed from the TypeScript type declarations bundled with the `cesium` npm package — not from a Markdown source. This gives the model access to the full API surface (classes, methods, properties, signatures).
-
-### 1. Install the cesium package
-
-```bash
-mkdir -p /mnt/storage/docs/frameworks/cesium
-cd /mnt/storage/docs/frameworks/cesium
-npm init -y
-npm install cesium
-```
-
-This places `Cesium.d.ts` at `node_modules/cesium/Source/Cesium.d.ts`.
-
-### 2. Add to `config.py`
-
-In `DOCS_SOURCES`, add:
-
-```python
-"cesium": [
-    "/mnt/storage/docs/frameworks/cesium/node_modules/cesium/Source/Cesium.d.ts",
-    "/mnt/storage/docs/frameworks/cesium/node_modules/cesium/README.md",
-],
-```
-
-### 3. Run the indexer
-
-```bash
-cd /mnt/storage/mcp-tools
-.venv/bin/python index_docs.py --lib cesium
-```
-
-This creates the ChromaDB collection `docs_cesium`.
-
-### 4. Wire up in `docs_server.py`
-
-Add the alias to `LIBRARY_ALIASES`:
-
-```python
-"cesium": "docs_cesium",
-"cesiumjs": "docs_cesium",
-```
-
-The `search_docs` tool picks this up automatically. A dedicated `search_cesium_docs` tool is also available for direct targeted queries.
-
-### 5. Clinerules
-
-In `.clinerules/search.md`, add to the tool reference table:
-
-```
-| `search_cesium_docs` | CesiumJS API — classes, methods, properties, 3D globe, terrain, cameras |
-```
-
-And in the server-to-tool mapping:
-
-```
-| `search_cesium_docs` | `docs-engine` |
-```
-
----
-
 ## General Pattern
 
 Every new ChromaDB documentation library follows the same steps:
@@ -276,9 +214,9 @@ Every new ChromaDB documentation library follows the same steps:
 
 `search_docs` is the primary docs tool. It parses the query for a library name and routes accordingly:
 
-- `"search cesium for camera fly-to"` — searches `docs_cesium` only
+- `"search nextjs for ISR"` — searches `docs_nextjs` only
 - `"search docs for async rendering"` — searches all collections, filters to score ≥ 0.75
-- Aliases: `ts` → TypeScript, `next` → Next.js, `cesiumjs` → Cesium
+- Aliases: `ts` → TypeScript, `next` → Next.js
 
 When adding a new library, registering it in `LIBRARY_ALIASES` is all that is needed for `search_docs` to target it by name.
 
