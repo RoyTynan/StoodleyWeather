@@ -167,10 +167,11 @@ def _update_log_response(
         _db_conn.commit()
 
 
-def _extract_streaming_response(chunks: list[bytes]) -> tuple[str, str | None, int | None, int | None]:
-    """Reconstruct assistant text, model, and token counts from buffered SSE chunks."""
+def _extract_streaming_response(chunks: list[bytes]) -> tuple[str, str | None, str | None, int | None, int | None]:
+    """Reconstruct assistant text, finish_reason, model, and token counts from buffered SSE chunks."""
     parts = []
     model = None
+    finish_reason = None
     prompt_tokens = None
     completion_tokens = None
     for chunk in chunks:
@@ -185,12 +186,16 @@ def _extract_streaming_response(chunks: list[bytes]) -> tuple[str, str | None, i
                         prompt_tokens = usage["prompt_tokens"]
                     if usage.get("completion_tokens"):
                         completion_tokens = usage["completion_tokens"]
-                    content = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    choice = data.get("choices", [{}])[0]
+                    content = choice.get("delta", {}).get("content", "")
                     if content:
                         parts.append(content)
+                    fr = choice.get("finish_reason")
+                    if fr:
+                        finish_reason = fr
         except Exception:
             pass
-    return "".join(parts), model, prompt_tokens, completion_tokens
+    return "".join(parts), finish_reason, model, prompt_tokens, completion_tokens
 
 
 _HALT_MSG = (
@@ -800,7 +805,7 @@ async def chat_completions(request: Request):
                 print(f"[proxy] streaming LLM error: {exc}")
             finally:
                 latency_ms = int((time.monotonic() - start) * 1000)
-                response_text, model, prompt_tokens, completion_tokens = _extract_streaming_response(response_chunks)
+                response_text, finish_reason, model, prompt_tokens, completion_tokens = _extract_streaming_response(response_chunks)
                 if LLM_HAS_THINKING:
                     response_text = _THINK_RE.sub("", response_text).strip()
                 if llm_down:
@@ -808,10 +813,10 @@ async def chat_completions(request: Request):
                 elif stream_exc is not None:
                     err_msg = f"[PROXY ERROR] {type(stream_exc).__name__}: {stream_exc}"
                     _update_log_response(log_id, err_msg, "error", latency_ms, step_type_override="ERROR")
-                elif not response_text:
+                elif not response_text or finish_reason == "length":
                     _do_halt(log_id, latency_ms, task_id)
                 else:
-                    _update_log_response(log_id, response_text, finish_reason=None,
+                    _update_log_response(log_id, response_text, finish_reason=finish_reason,
                                          latency_ms=latency_ms, model=model,
                                          prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
             if llm_down:
