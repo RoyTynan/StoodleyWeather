@@ -40,6 +40,8 @@ On May 9th 2026 I migrated this setup by port-forwarding the Ubuntu machine  (RT
 
 ## What the System Does
 
+### "It's not just about the size of the LLM, it's also so important to get the right infrastructure in place around the LLM"
+
 At its core is a RAG (Retrieval-Augmented Generation) pipeline — source code from all active repos is chunked and embedded into 1024-dimensional vectors, then persisted in ChromaDB, a local vector database. At query time ChromaDB performs approximate nearest-neighbour search to find semantically similar chunks, which are combined with BM25 keyword results and fused through Reciprocal Rank Fusion. This candidate pool is then passed through a cross-encoder reranker which scores each chunk against the actual query as a pair — producing a much more precise final selection than vector similarity alone.
 
 The enriched context is injected into every prompt sent to the LLM, meaning Cline receives highly accurate codebase context without you having to manually reference files.
