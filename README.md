@@ -17,7 +17,7 @@ Cline in VS Code sends every prompt through a proxy on the i7. The proxy enriche
 
 Hello, my name is Roy Tynan. I live in West Yorkshire, England. I'm an electronics engineer / software engineer with quite a number of years (too many) development experience.
 
-During March 2026 I decided to set up my own LLM system. I was fortunate enough to already have two Ubuntu machines — one with an NVIDIA RTX 2060 GPU and the other with an NVIDIA RTX 3090. I experimented with running smaller LLMs and tried to split the LLM across the two machines, but it proved very difficult and was very unstable.
+During early March 2026 I decided to set up my own LLM system. I was fortunate enough to already have two Ubuntu machines — one with an NVIDIA RTX 2060 GPU and the other with an NVIDIA RTX 3090. I experimented with running smaller LLMs and tried to split the LLM across the two machines, but it proved very difficult and was very unstable.
 
 So I purchased an NVIDIA Blackwell RTX PRO 4000 GPU card and placed it alongside the RTX 3090, giving me a total of 48GB of GPU VRAM in one machine. This worked really well. By results I mean something like a Claude Code style of coding assistant but running entirely locally.
 
@@ -32,6 +32,11 @@ If you find it useful and you're a GitHub member, a GitHub star is always apprec
 don't forget the @ before gmail
 
 ---
+
+## Update
+
+On May 9th 2026 I migrated this setup by port-forwarding the Ubuntu machine  (RTX2060) known as i7 which hosts this RAG. It's available over the internet to another member of the current development team I work with; it's a Cloudflare, Python and  React.native app.
+
 
 ## What the System Does
 
