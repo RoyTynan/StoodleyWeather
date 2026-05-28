@@ -77,6 +77,7 @@ npm install && npm run dev
 | [LLM-QWEN3.md](docs/LLM-QWEN3.md) | Qwen3.6-35B-A3B setup — download, start script, VRAM, proxy config |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system works — proxy, RAG, ChromaDB, MCP, file watching |
 | [MONITOR.md](docs/MONITOR.md) | LLM prompt monitor — task audit trail, step types, HALT detection |
+| [COMPACTION.md](docs/COMPACTION.md) | Context compaction — two-layer pruning, background LLM summarisation, HALT recovery |
 | [WORKFLOW.md](docs/WORKFLOW.md) | Working with Cline — prompt writing, RAG vs read_file, examples |
 | [GPU-MODELS.md](docs/GPU-MODELS.md) | GPU requirements and recommended models by VRAM |
 | [NEW-PROJECT.md](docs/NEW-PROJECT.md) | Adding a new project to the setup |
