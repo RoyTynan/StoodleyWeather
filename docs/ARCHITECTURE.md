@@ -85,7 +85,15 @@ The proxy buffers the complete LLM response before forwarding it to Cline. This 
 
 ### HALT Detection
 
-HALT fires when the LLM returns an empty response or `finish_reason=length` (output cut short at the token limit — the primary signal for context saturation). The proxy:
+HALT fires when the LLM returns an empty response or `finish_reason=length` (output cut short at the token limit — the primary signal for context saturation).
+
+When `COMPACT_ENABLED = True` the proxy first attempts recovery:
+
+1. Runs a synchronous compaction pass (`_summarise_old_messages`)
+2. If new summaries were produced, rebuilds the context with summaries swapped in and retries the LLM request once
+3. If the retry succeeds, the task continues — no HALT is shown to the user
+
+If recovery fails (nothing new to summarise, or LLM unreachable), the proxy falls through to the normal HALT response:
 
 1. Logs the step as `HALT` in the prompt database
 2. Returns a valid Cline `attempt_completion` response telling the user the query was too large and to start a new task with a more focused prompt
@@ -93,7 +101,42 @@ HALT fires when the LLM returns an empty response or `finish_reason=length` (out
 
 `finish_reason=length` is captured from the SSE stream and is a more reliable saturation signal than an empty response, which can occur for other reasons.
 
-This stops the retry death spiral: each retry would resend the full conversation history, making context saturation worse with every attempt.
+### Context Compaction
+
+As a coding session progresses, the conversation history grows. Every Cline step — tool results, file reads, write confirmations, verify outputs — accumulates in the message array that is resent to the LLM on each request. Left unchecked this leads to context saturation and HALT.
+
+The system uses two complementary layers. See [COMPACTION.md](COMPACTION.md) for full detail.
+
+**Why the LLM cannot compact its own context**
+
+Asking the LLM to summarise the conversation fails in practice. By the time the context is large enough to need compacting, it is already too large to fit in the model's context window alongside the summarisation instruction. The compaction request swamps the very resource it is trying to free.
+
+**Layer 1 — Regex sliding window pruning (always on)**
+
+On every request, before the enriched prompt is forwarded, the proxy strips bulk content from messages older than the last `PRUNE_KEEP_LAST_N` (default: 4):
+
+- **Fenced code blocks** (`` ``` ... ``` ``) → replaced with `[Code block omitted]`
+- **Tool result bodies** → replaced with `[Content omitted]`, header kept for conversation coherence
+
+No LLM call, no background thread, no user action required. Savings per request are stored in `chars_pruned` in `prompt_log.db`.
+
+**Layer 2 — Background LLM per-step compaction (COMPACT_ENABLED)**
+
+When `prompt_tokens` on a completed step exceeds `COMPACT_TRIGGER_TOKENS` (default: 20000), a background thread summarises old messages one at a time using a short LLM call: *"Summarise this in 2–3 sentences, preserving file names, function names, and error messages."* Summaries are stored in the `message_summaries` table and swapped in on subsequent requests in place of the full message content. Each individual summarisation call is small and never risks saturation.
+
+When a background compaction completes, the proxy logs an `AUTOCOMP` step to `prompt_log.db` — visible in the monitor as a violet badge in the task timeline.
+
+**HALT recovery**
+
+When `COMPACT_ENABLED = True` and a HALT fires (empty response or `finish_reason=length`), the proxy runs a synchronous compaction pass and retries the LLM request once before returning the HALT response to the user. If the retry succeeds, the task continues transparently. The HALT step is only written to the log if recovery fails.
+
+**The compact_context MCP tool**
+
+The `compact_context` tool in `server.py` reports current compaction state on demand — Layer 1 savings (`chars_pruned`), Layer 2 summary count, and current prompt token count. It logs itself to `prompt_log.db` with `step_type=COMPACT` so it is visible in the monitor.
+
+**What is never pruned**
+
+The proxy-injected code chunks (skeleton + relevant source) are injected into the most recent user message, which is always within the `PRUNE_KEEP_LAST_N` window. RAG context is always fully available to the LLM on the current step.
 
 ### LLM-Down Detection
 
@@ -173,12 +216,22 @@ Every request and response is logged to `/mnt/storage/prompt_log.db`. The `promp
 | `latency_ms` | End-to-end latency |
 | `model` | Model name returned by the LLM server |
 | `task_id` | UUID grouping all steps of one Cline task |
-| `step_type` | TASK / READ / WRITE / CMD / ERROR / HALT / DONE / FOLLOWUP / TOOL / PROMPT |
+| `step_type` | TASK / READ / WRITE / CMD / ERROR / HALT / DONE / FOLLOWUP / TOOL / PROMPT / COMPACT / AUTOCOMP |
+| `chars_pruned` | Characters removed from the message history by proxy-side compaction on this request |
 | `user_task` | Clean typed prompt (extracted from `<task>` tags) |
 | `prompt_tokens` | Input token count |
 | `completion_tokens` | Output token count |
 
 The schema self-migrates on proxy startup — missing columns are added via `ALTER TABLE` so the database survives proxy upgrades without manual intervention.
+
+A `message_summaries` table stores LLM-generated summaries for old messages (Layer 2 compaction):
+
+| Column | Description |
+|---|---|
+| `content_hash` | SHA-256 of the original message content (primary key) |
+| `summary` | LLM-generated 2–3 sentence summary |
+| `task_id` | Task the message belonged to |
+| `created_at` | UTC timestamp when the summary was produced |
 
 A `config_snapshots` table records all proxy config values on every startup, timestamped, so you can see what settings were active for any given session. This includes all tuning constants (`N_CONTEXT_CHUNKS`, `LLM_HAS_THINKING`, `DEP_GRAPH_ENABLED`, etc.).
 
@@ -260,6 +313,7 @@ Two FastMCP servers run on the i7. Cline launches them automatically via SSH whe
 | `search_official_docs` | Ripgrep keyword search over documentation |
 | `read_doc_page` | Reads a specific documentation file |
 | `verify_project` | Runs type-check and lint on a repo |
+| `compact_context` | Reports Layer 1 pruning savings and Layer 2 summary count for the current task |
 
 ### docs-engine (docs_server.py)
 

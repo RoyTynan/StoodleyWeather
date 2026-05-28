@@ -18,7 +18,7 @@ Every Cline task appears as a **task card** — a collapsible group of steps in 
 
 | Field | Description |
 |---|---|
-| User task | The original typed prompt (extracted from `<task>` tags in Cline's message) |
+| User task | The original typed prompt — resolved in order: stored `user_task` value → `<task>` tag extraction from `raw_query` → first readable line of `raw_query` → step-type summary (e.g. `TASK → READ → DONE`) |
 | Repo badge | Repo detected from the conversation |
 | Step count | Total steps in the task |
 | Total latency | Sum of LLM latency across all steps in ms |
@@ -53,6 +53,8 @@ Click any step to expand it — showing the full enriched message sent to the LL
 | `FOLLOWUP` | Orange | User follow-up within the same task |
 | `TOOL` | Dark gray | MCP tool call (semantic search, verify, etc.) |
 | `PROMPT` | Blue | Other prompt not matching a specific category |
+| `COMPACT` | Cyan | The `compact_context` MCP tool was called — shows proxy pruning savings for the current task |
+| `AUTOCOMP` | Violet | Background Layer 2 compaction completed — the proxy summarised old messages automatically. Preview shows how many messages were summarised in that pass |
 
 The step type legend at the top of the page is interactive — click any badge to see a description of what that step type means. Click again to close, or click a different badge to switch.
 
@@ -65,13 +67,11 @@ The step type legend at the top of the page is interactive — click any badge t
 
 ## HALT Steps
 
-A `HALT` step (bright red) means the LLM returned an empty response — typically caused by context window saturation. When this happens the proxy:
+A `HALT` step (bright red) means the LLM returned an empty response — typically caused by context window saturation.
 
-1. Logs the step as `HALT`
-2. Returns an `attempt_completion` response to Cline telling the user the query was too large
-3. Blocks any retry for the same task — so Cline cannot spiral into repeated failed requests
+When `COMPACT_ENABLED = True` the proxy first attempts recovery before giving up: it runs a synchronous compaction pass and retries the request once. If recovery succeeds you will see an `AUTOCOMP` step immediately before the response — no HALT is written. The HALT step only appears if recovery fails.
 
-If you see a HALT, start a new Cline task with a more focused prompt. Use the codebase skeleton and RAG context to your advantage rather than asking the model to read the entire project.
+If you do see a HALT, start a new Cline task with a more focused prompt. Use the codebase skeleton and RAG context to your advantage rather than asking the model to read the entire project.
 
 ---
 
@@ -87,6 +87,10 @@ The **Config** button at the top right opens a panel showing the proxy configura
 | `CHUNK_OVERLAP` | Overlap between chunks |
 | `LLM_URL` | LLM server address |
 | `EMBED_URL` | Embedding server address |
+| `PRUNE_KEEP_LAST_N` | Messages kept fully intact by Layer 1 regex pruning |
+| `COMPACT_ENABLED` | Whether Layer 2 background LLM compaction is active |
+| `COMPACT_TRIGGER_TOKENS` | Token count that triggers a background compaction pass |
+| `COMPACT_MIN_CHARS` | Minimum message length worth summarising |
 | Startup time | When the proxy last started |
 
 Config is snapshotted to SQLite at every proxy startup — so the panel always shows what was active when the logs were produced.

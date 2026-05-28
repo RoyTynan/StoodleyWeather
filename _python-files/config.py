@@ -49,6 +49,9 @@ N_CONTEXT_CHUNKS = 5
 # Keeps the preamble compact on larger repos
 SKELETON_MAX_FILES = 60
 
+# Path to the SQLite prompt log used by proxy.py and server.py
+PROMPT_LOG_DB = "/mnt/storage/prompt_log.db"
+
 # Derived — do not edit
 INDEX_SCRIPT = os.path.join(TOOLS_DIR, "index_repos.py")
 VENV_PYTHON = os.path.join(TOOLS_DIR, ".venv/bin/python")
@@ -84,6 +87,25 @@ DOCS_EXCLUDED_DIRS = {"tr1", "ext", "debug", "backward", "decimal", "profile"}
 # ===========================================================
 # MANIFEST PATHS (index_repos.py, index_docs.py)
 # ===========================================================
+
+# ===========================================================
+# CONTEXT COMPACTION (proxy.py)
+# ===========================================================
+
+# Messages kept fully intact by regex sliding window pruning.
+# Messages older than this have code blocks and tool result bodies stripped.
+PRUNE_KEEP_LAST_N = 4
+
+# Master switch for Layer 2 background LLM per-step compaction.
+# Layer 1 regex pruning always runs regardless of this setting.
+COMPACT_ENABLED = True
+
+# Prompt token count that triggers a background LLM compaction pass.
+COMPACT_TRIGGER_TOKENS = 20000
+
+# Minimum message length (chars) worth sending to the LLM for summarisation.
+# Short messages are left verbatim.
+COMPACT_MIN_CHARS = 500
 
 # ===========================================================
 # DEPENDENCY GRAPH (index_repos.py, proxy.py)

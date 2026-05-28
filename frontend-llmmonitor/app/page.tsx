@@ -16,6 +16,8 @@ const STEP_STYLE: Record<string, { badge: string; row: string }> = {
   FOLLOWUP: { badge: 'bg-orange-950 text-orange-300 border-orange-800', row: 'border-orange-950' },
   TOOL:     { badge: 'bg-gray-900 text-gray-500 border-gray-800',      row: 'border-gray-900' },
   PROMPT:   { badge: 'bg-blue-950 text-blue-300 border-blue-900',      row: 'border-blue-900' },
+  COMPACT:  { badge: 'bg-cyan-950 text-cyan-300 border-cyan-800',      row: 'border-cyan-950' },
+  AUTOCOMP: { badge: 'bg-violet-950 text-violet-300 border-violet-800', row: 'border-violet-950' },
 };
 
 function stepStyle(type: string | null) {
@@ -33,6 +35,8 @@ const STEP_DESC: Record<string, string> = {
   FOLLOWUP: 'A follow-up user message within the same task, after the initial TASK step.',
   TOOL:     'An MCP tool call (semantic search, verify_project, etc.) that does not match a more specific step type.',
   PROMPT:   'A prompt that does not match any other step type classification.',
+  COMPACT:  'Context compaction — the compact_context MCP tool summarised the conversation history. Shows token count before compaction.',
+  AUTOCOMP: 'Background Layer 2 compaction — the proxy automatically summarised old messages to reduce context size.',
 };
 
 // ── Small reusable bits ──────────────────────────────────────────────────────
@@ -170,6 +174,31 @@ function TaskCard({
     ? (task.total_latency_ms / 1000).toFixed(1) + 's'
     : '—';
 
+  // Resolve task title: stored value → raw_query extraction → step-type summary
+  const taskTitle = (() => {
+    const t = task.user_task?.trim();
+    if (t && t.length >= 4 && !/^\(\./.test(t)) return t;
+
+    // Try to pull task text from the TASK step's raw_query
+    const taskStep = task.steps.find(s => s.step_type === 'TASK');
+    if (taskStep?.raw_query) {
+      const tagMatch = taskStep.raw_query.match(/<task>([\s\S]*?)<\/task>/);
+      if (tagMatch) {
+        const text = tagMatch[1].trim().replace(/\s+/g, ' ');
+        if (text.length >= 4) return text.slice(0, 150);
+      }
+      // Fall back to first readable line (skip tag openers and bracket lines)
+      const line = taskStep.raw_query.split('\n')
+        .map(l => l.trim())
+        .find(l => l.length > 10 && !l.startsWith('<') && !l.startsWith('['));
+      if (line) return line.slice(0, 150);
+    }
+
+    // Last resort: summarise the step types present
+    const types = task.steps.map(s => s.step_type).filter(Boolean);
+    return types.length > 0 ? types.join(' → ') : null;
+  })();
+
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!pendingDelete) { setPendingDelete(true); return; }
@@ -186,8 +215,8 @@ function TaskCard({
       >
         <span className="text-gray-400 text-base shrink-0">{expanded ? '▾' : '▸'}</span>
 
-        <span className="text-gray-200 text-base flex-1 truncate" title={task.user_task ?? undefined}>
-          {task.user_task ?? <span className="text-gray-600 italic">no task text</span>}
+        <span className="text-gray-200 text-base flex-1 truncate" title={taskTitle ?? undefined}>
+          {taskTitle ?? <span className="text-gray-600 italic">untitled task</span>}
         </span>
 
         {task.repo && (
@@ -239,7 +268,6 @@ export default function HomePage() {
   const [showConfig, setShowConfig] = useState(false);
   const [activeLegend, setActiveLegend] = useState<string | null>(null);
   const [config, setConfig] = useState<{ timestamp: string; config: Record<string, string | number> } | null>(null);
-
   const fetchTasks = async (p = page) => {
     const res = await fetch(`/api/tasks?limit=${PAGE_SIZE}&offset=${p * PAGE_SIZE}`);
     const data = await res.json();

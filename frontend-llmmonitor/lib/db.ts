@@ -175,6 +175,63 @@ export function deleteAllPrompts(): number {
   return result.changes;
 }
 
+export type AutocompSummary = {
+  content_hash: string;
+  summary: string;
+  created_at: string;
+};
+
+export type AutocompTask = {
+  task_id: string;
+  user_task: string | null;
+  summary_count: number;
+  last_created_at: string;
+  summaries: AutocompSummary[];
+};
+
+export function listAutocompTasks(limit = 50): AutocompTask[] {
+  const db = getDb();
+
+  const headers = db.prepare(`
+    SELECT ms.task_id,
+           MAX(p.user_task) as user_task,
+           COUNT(*) as summary_count,
+           MAX(ms.created_at) as last_created_at
+    FROM message_summaries ms
+    LEFT JOIN prompts p ON p.task_id = ms.task_id AND p.step_type = 'TASK'
+    GROUP BY ms.task_id
+    ORDER BY last_created_at DESC
+    LIMIT ?
+  `).all(limit) as Omit<AutocompTask, 'summaries'>[];
+
+  if (headers.length === 0) return [];
+
+  const placeholders = headers.map(() => '?').join(',');
+  const taskIds = headers.map(h => h.task_id);
+
+  const allSummaries = db.prepare(`
+    SELECT content_hash, summary, task_id, created_at
+    FROM message_summaries
+    WHERE task_id IN (${placeholders})
+    ORDER BY created_at ASC
+  `).all(...taskIds) as (AutocompSummary & { task_id: string })[];
+
+  const byTask = new Map<string, AutocompSummary[]>();
+  for (const s of allSummaries) {
+    if (!byTask.has(s.task_id)) byTask.set(s.task_id, []);
+    byTask.get(s.task_id)!.push({ content_hash: s.content_hash, summary: s.summary, created_at: s.created_at });
+  }
+
+  return headers.map(h => ({ ...h, summaries: byTask.get(h.task_id) ?? [] }));
+}
+
+export function countAutocompTasks(): number {
+  const row = getDb()
+    .prepare('SELECT COUNT(DISTINCT task_id) as count FROM message_summaries')
+    .get() as { count: number };
+  return row.count;
+}
+
 export type ConfigSnapshot = {
   id: number;
   timestamp: string;

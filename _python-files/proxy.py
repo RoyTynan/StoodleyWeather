@@ -10,6 +10,7 @@ repo from conversation context and queries the right collection.
 Configure the addresses and paths below to match your setup.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -33,6 +34,7 @@ from config import (
     CHUNK_CHARS, CHUNK_OVERLAP,
     DEP_GRAPH_ENABLED, DEP_GRAPH_DB, MAX_IMPACT_FILES,
     LLM_HAS_THINKING,
+    PRUNE_KEEP_LAST_N, COMPACT_ENABLED, COMPACT_TRIGGER_TOKENS, COMPACT_MIN_CHARS,
 )
 from rerank import rerank
 from verify import verify
@@ -70,6 +72,7 @@ def _init_db():
         ("response_text", "TEXT"), ("latency_ms", "INTEGER"), ("model", "TEXT"),
         ("task_id", "TEXT"), ("step_type", "TEXT"), ("user_task", "TEXT"),
         ("prompt_tokens", "INTEGER"), ("completion_tokens", "INTEGER"),
+        ("chars_pruned", "INTEGER"),
     ]:
         if col not in existing:
             _db_conn.execute(f"ALTER TABLE prompts ADD COLUMN {col} {definition}")
@@ -80,8 +83,19 @@ def _init_db():
             config    TEXT    NOT NULL
         )
     """)
+    _db_conn.execute("""
+        CREATE TABLE IF NOT EXISTS message_summaries (
+            content_hash TEXT PRIMARY KEY,
+            summary      TEXT NOT NULL,
+            task_id      TEXT,
+            created_at   TEXT NOT NULL
+        )
+    """)
     _db_conn.commit()
-    print(f"[db] prompt log: {PROMPT_LOG_DB}")
+    # Warm the in-memory summary cache from persisted summaries
+    for row in _db_conn.execute("SELECT content_hash, summary FROM message_summaries"):
+        _summary_cache[row[0]] = row[1]
+    print(f"[db] prompt log: {PROMPT_LOG_DB} ({len(_summary_cache)} summaries loaded)")
 
 
 def _snapshot_config():
@@ -99,6 +113,10 @@ def _snapshot_config():
         "DEP_GRAPH_ENABLED": DEP_GRAPH_ENABLED,
         "MAX_IMPACT_FILES": MAX_IMPACT_FILES,
         "LLM_HAS_THINKING": LLM_HAS_THINKING,
+        "PRUNE_KEEP_LAST_N": PRUNE_KEEP_LAST_N,
+        "COMPACT_ENABLED": COMPACT_ENABLED,
+        "COMPACT_TRIGGER_TOKENS": COMPACT_TRIGGER_TOKENS,
+        "COMPACT_MIN_CHARS": COMPACT_MIN_CHARS,
     })
     with _db_lock:
         _db_conn.execute(
@@ -109,6 +127,198 @@ def _snapshot_config():
     print("[db] config snapshot written")
 
 
+_CODE_BLOCK_RE = re.compile(r'```[\s\S]*?```')
+_TOOL_RESULT_RE = re.compile(r"(\[(?:use_mcp_tool|read_file|read_repo_file)[^\]]*\][^\\]*)\\n.+")
+
+# In-memory cache of LLM-generated summaries: content_hash → summary text.
+# Populated from message_summaries table at startup and updated by background compaction.
+_summary_cache: dict[str, str] = {}
+
+
+def _content_chars(content) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
+    return len(str(content))
+
+
+def _extract_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return str(content)
+
+
+def _content_hash(content) -> str:
+    return hashlib.sha256(_extract_text(content).encode()).hexdigest()[:16]
+
+
+def _prune_text(text: str) -> str:
+    text = _CODE_BLOCK_RE.sub("[Code block omitted]", text)
+    text = _TOOL_RESULT_RE.sub(r'\1\\n[Content omitted]', text)
+    return text
+
+
+def _prune_content(content):
+    if isinstance(content, str):
+        return _prune_text(content)
+    if isinstance(content, list):
+        result = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                result.append({**part, "text": _prune_text(part.get("text", ""))})
+            else:
+                result.append(part)
+        return result
+    return content
+
+
+def _prune_old_messages(messages: list, keep_last_n: int = PRUNE_KEEP_LAST_N) -> tuple[list, int, int]:
+    """Strip code blocks and tool results from messages older than keep_last_n.
+    If a LLM summary exists for a message it is used in place of regex pruning.
+    Returns (pruned_messages, original_chars, pruned_chars)."""
+    if len(messages) <= keep_last_n:
+        return messages, 0, 0
+    original_chars = sum(_content_chars(m.get("content", "")) for m in messages)
+    cutoff = len(messages) - keep_last_n
+    result = []
+    for i, msg in enumerate(messages):
+        if i < cutoff:
+            content = msg.get("content", "")
+            text = _extract_text(content)
+            if len(text) >= COMPACT_MIN_CHARS:
+                h = _content_hash(content)
+                if h in _summary_cache:
+                    result.append({**msg, "content": f"[Summary] {_summary_cache[h]}"})
+                    continue
+            result.append({**msg, "content": _prune_content(content)})
+        else:
+            result.append(msg)
+    pruned_chars = sum(_content_chars(m.get("content", "")) for m in result)
+    return result, original_chars, pruned_chars
+
+
+def _summarise_old_messages(task_id: str, messages: list):
+    """Background thread: LLM-summarise old messages one at a time.
+    Only runs when COMPACT_ENABLED=True. Stores summaries in DB and cache."""
+    cutoff = len(messages) - PRUNE_KEEP_LAST_N
+    if cutoff <= 0:
+        return
+    summarised = 0
+    for i, msg in enumerate(messages[:cutoff]):
+        content = msg.get("content", "")
+        text = _extract_text(content)
+        if len(text) < COMPACT_MIN_CHARS:
+            continue
+        h = _content_hash(content)
+        if h in _summary_cache:
+            continue
+        try:
+            resp = _http_client.post(
+                f"{LLM_URL}/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": (
+                        "Summarise the following in 2-3 sentences. "
+                        "Preserve any file names, function names, and error messages.\n\n"
+                        + text[:3000]
+                    )}],
+                    "max_tokens": 150,
+                    "stream": False,
+                    "enable_thinking": False,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            summary = resp.json()["choices"][0]["message"]["content"].strip()
+            if LLM_HAS_THINKING:
+                summary = _THINK_RE.sub("", summary).strip()
+            if not summary:
+                continue
+            _summary_cache[h] = summary
+            with _db_lock:
+                _db_conn.execute(
+                    """INSERT OR REPLACE INTO message_summaries
+                       (content_hash, summary, task_id, created_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (h, summary, task_id, datetime.now(timezone.utc).isoformat()),
+                )
+                _db_conn.commit()
+            summarised += 1
+            print(f"[compact] msg {i} summarised ({len(text)}→{len(summary)} chars) task={task_id[:8]}")
+        except Exception as e:
+            print(f"[compact] summarise error msg {i}: {e}")
+    if summarised:
+        print(f"[compact] {summarised} message(s) summarised for task {task_id[:8]}")
+        try:
+            with _db_lock:
+                _db_conn.execute(
+                    """INSERT INTO prompts (timestamp, task_id, step_type, raw_query, response_text)
+                       VALUES (?, ?, 'AUTOCOMP', 'background compaction', ?)""",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        task_id,
+                        f"Summarised {summarised} message(s)",
+                    ),
+                )
+                _db_conn.commit()
+        except Exception as e:
+            print(f"[compact] failed to log AUTOCOMP step: {e}")
+
+
+def _maybe_compact(task_id: str | None, messages: list, prompt_tokens: int | None):
+    """Fire background LLM compaction if enabled and token threshold is crossed."""
+    if not COMPACT_ENABLED or not task_id or not prompt_tokens:
+        return
+    if prompt_tokens >= COMPACT_TRIGGER_TOKENS:
+        threading.Thread(
+            target=_summarise_old_messages,
+            args=[task_id, messages],
+            daemon=True,
+        ).start()
+
+
+def _compact_and_retry(
+    task_id: str, original_messages: list, body: dict
+) -> tuple[list[bytes], str, str | None, str | None, int | None, int | None] | None:
+    """Synchronous compaction + LLM retry for HALT recovery.
+    Summarises old messages, rebuilds context, retries the request once.
+    Returns (chunks, text, finish, model, prompt_tokens, completion_tokens) or None."""
+    if not COMPACT_ENABLED or not task_id:
+        return None
+    print(f"[proxy] HALT recovery — compacting task {task_id[:8]}")
+    before = len(_summary_cache)
+    _summarise_old_messages(task_id, original_messages)
+    if len(_summary_cache) == before:
+        print(f"[proxy] compaction produced no new summaries — HALT stands")
+        return None
+
+    # enrich_messages internally calls _prune_old_messages which picks up new summaries
+    compacted, _ = enrich_messages(list(original_messages))
+    retry_body = {**body, "messages": compacted}
+    chunks: list[bytes] = []
+    try:
+        with _http_client.stream(
+            "POST", f"{LLM_URL}/v1/chat/completions", json=retry_body, timeout=120.0
+        ) as r:
+            for chunk in r.iter_bytes():
+                chunks.append(chunk)
+    except Exception as e:
+        print(f"[proxy] compaction retry stream error: {e}")
+        return None
+
+    text, finish, model, pt, ct = _extract_streaming_response(chunks)
+    if LLM_HAS_THINKING:
+        text = _THINK_RE.sub("", text).strip()
+    if not text or finish == "length":
+        print(f"[proxy] compaction retry also saturated for task {task_id[:8]}")
+        return None
+
+    print(f"[proxy] compaction retry succeeded for task {task_id[:8]}")
+    return chunks, text, finish, model, pt, ct
+
+
 def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> int | None:
     if _db_conn is None:
         return None
@@ -117,8 +327,8 @@ def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> i
             """INSERT INTO prompts
                (timestamp, repo, raw_query, enriched_message, full_messages,
                 skeleton_injected, chunks_injected, verify_injected, finish_reason,
-                task_id, step_type, user_task)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                task_id, step_type, user_task, chars_pruned)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now(timezone.utc).isoformat(),
                 meta.get("repo"),
@@ -132,6 +342,7 @@ def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> i
                 meta.get("task_id"),
                 meta.get("step_type"),
                 meta.get("user_task"),
+                meta.get("chars_pruned", 0),
             ),
         )
         _db_conn.commit()
@@ -414,16 +625,12 @@ def _detect_step(content: str) -> tuple[str, str | None, str | None]:
     """Classify a user message. Returns (step_type, task_id, user_task)."""
     global _current_task_id
 
-    task_match = _TASK_TAG.search(content)
-    if task_match:
-        new_id = str(uuid.uuid4())
-        with _task_id_lock:
-            _current_task_id = new_id
-        return 'TASK', new_id, task_match.group(1).strip()
-
     with _task_id_lock:
         task_id = _current_task_id
 
+    # Check Cline tool-result patterns first — they all start with '['.
+    # Must run before the <task> search so that file contents containing
+    # the literal regex pattern (e.g. proxy.py source) don't misclassify.
     s = content.lstrip()
     if s.startswith('[read_file'):
         return 'READ', task_id, None
@@ -439,8 +646,17 @@ def _detect_step(content: str) -> tuple[str, str | None, str | None]:
         return 'DONE', task_id, None
     if s.startswith('[ask_followup_question'):
         return 'FOLLOWUP', task_id, None
+    if 'compact_context' in s:
+        return 'COMPACT', task_id, None
     if s.startswith('['):
         return 'TOOL', task_id, None
+
+    task_match = _TASK_TAG.search(content)
+    if task_match:
+        new_id = str(uuid.uuid4())
+        with _task_id_lock:
+            _current_task_id = new_id
+        return 'TASK', new_id, task_match.group(1).strip()
 
     return 'PROMPT', task_id, None
 
@@ -679,9 +895,16 @@ def enrich_messages(messages: list) -> tuple[list, dict]:
         "repo": None, "raw_query": "", "enriched_message": "",
         "skeleton_injected": False, "chunks_injected": False, "verify_injected": False,
         "task_id": None, "step_type": None, "user_task": None,
+        "chars_pruned": 0,
     }
     if not messages:
         return messages, meta
+
+    messages, orig_chars, pruned_chars = _prune_old_messages(list(messages))
+    if orig_chars != pruned_chars:
+        saved = orig_chars - pruned_chars
+        meta["chars_pruned"] = saved
+        print(f"[proxy] context pruning: -{saved} chars (~{saved // 4} tokens)")
 
     last_user_idx = None
     for i in range(len(messages) - 1, -1, -1):
@@ -789,6 +1012,7 @@ async def chat_completions(request: Request):
     body = await request.json()
     if LLM_HAS_THINKING:
         body["enable_thinking"] = False  # disable think blocks — Cline cannot parse them
+    original_messages = list(body.get("messages", []))  # capture before enrichment/pruning
     body["messages"], enrich_meta = enrich_messages(body.get("messages", []))
 
     task_id = enrich_meta.get("task_id")
@@ -839,7 +1063,18 @@ async def chat_completions(request: Request):
                 err_msg = f"[PROXY ERROR] {type(stream_exc).__name__}: {stream_exc}"
                 _update_log_response(log_id, err_msg, "error", latency_ms, step_type_override="ERROR")
             elif not response_text or finish_reason == "length":
-                _do_halt(log_id, latency_ms, task_id)
+                retry = _compact_and_retry(task_id, original_messages, body)
+                if retry:
+                    r_chunks, r_text, r_finish, r_model, r_pt, r_ct = retry
+                    r_latency = int((time.monotonic() - start) * 1000)
+                    step_override = "DONE" if "<attempt_completion>" in r_text else None
+                    _update_log_response(log_id, r_text, r_finish, r_latency,
+                                         model=r_model, prompt_tokens=r_pt,
+                                         completion_tokens=r_ct,
+                                         step_type_override=step_override)
+                    yield from r_chunks
+                else:
+                    _do_halt(log_id, latency_ms, task_id)
             elif finish_reason == "stop" and not _TOOL_TAG_RE.search(response_text):
                 wrapped = f"<attempt_completion>\n<result>\n{response_text}\n</result>\n</attempt_completion>"
                 print(f"[proxy] wrapping plain-text response in attempt_completion")
@@ -847,6 +1082,7 @@ async def chat_completions(request: Request):
                                      latency_ms=latency_ms, model=model,
                                      prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                                      step_type_override="DONE")
+                _maybe_compact(task_id, original_messages, prompt_tokens)
                 yield from _wrap_as_sse_chunks(wrapped, model)
             else:
                 step_override = "DONE" if "<attempt_completion>" in response_text else None
@@ -854,6 +1090,7 @@ async def chat_completions(request: Request):
                                      latency_ms=latency_ms, model=model,
                                      prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                                      step_type_override=step_override)
+                _maybe_compact(task_id, original_messages, prompt_tokens)
                 yield from response_chunks
 
         return StreamingResponse(generate(), media_type="text/event-stream")
@@ -896,11 +1133,28 @@ async def chat_completions(request: Request):
         log_id = _log_prompt(enrich_meta, body["messages"], finish_reason=finish)
 
         if not choices or (not content and not tool_calls):
+            retry = _compact_and_retry(task_id, original_messages, body)
+            if retry:
+                r_chunks, r_text, r_finish, r_model, r_pt, r_ct = retry
+                r_latency = int((time.monotonic() - start) * 1000)
+                step_override = "DONE" if "<attempt_completion>" in r_text else None
+                _update_log_response(log_id, r_text, r_finish, r_latency,
+                                     model=r_model, prompt_tokens=r_pt,
+                                     completion_tokens=r_ct,
+                                     step_type_override=step_override)
+                return JSONResponse(content={
+                    "id": "proxy-compacted",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": r_text}, "finish_reason": r_finish}],
+                    "model": r_model or "proxy",
+                    "usage": {"prompt_tokens": r_pt or 0, "completion_tokens": r_ct or 0},
+                }, status_code=200)
             _do_halt(log_id, latency_ms, task_id)
             return _halt_json_response()
 
         _update_log_response(log_id, content, finish, latency_ms, model=model,
                              prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+        _maybe_compact(task_id, original_messages, prompt_tokens)
         return JSONResponse(content=data, status_code=response.status_code)
 
 

@@ -1,11 +1,13 @@
 import os
+import sqlite3
 import subprocess
 import httpx
 import chromadb
 from chromadb.config import Settings
+from datetime import datetime, timezone
 from mcp.server.fastmcp import FastMCP
 from functools import lru_cache
-from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_QUERY_PREFIX, REACT_DOCS
+from config import REPO_ROOT, CHROMA_DIR, EMBED_URL, EMBED_QUERY_PREFIX, REACT_DOCS, PROMPT_LOG_DB
 from verify import verify
 
 mcp = FastMCP("Context Engine")
@@ -30,7 +32,7 @@ def _get_embedding(query: str) -> list:
 
 
 @mcp.tool()
-def list_repos(task_progress: str = "") -> str:
+def list_repos() -> str:
     """Lists all repositories currently available."""
     try:
         repos = [d for d in os.listdir(REPO_ROOT) if os.path.isdir(os.path.join(REPO_ROOT, d))]
@@ -40,7 +42,7 @@ def list_repos(task_progress: str = "") -> str:
 
 
 @mcp.tool()
-def read_repo_file(repo_name: str, relative_path: str, task_progress: str = "") -> str:
+def read_repo_file(repo_name: str, relative_path: str) -> str:
     """Reads a file from your project repo (limited to 500 lines)."""
     full_path = os.path.join(REPO_ROOT, repo_name, relative_path)
     try:
@@ -54,7 +56,7 @@ def read_repo_file(repo_name: str, relative_path: str, task_progress: str = "") 
 
 
 @mcp.tool()
-def search_official_docs(query: str, task_progress: str = "") -> str:
+def search_official_docs(query: str) -> str:
     """Search official React documentation."""
     target = REACT_DOCS
     if not os.path.exists(target):
@@ -69,7 +71,7 @@ def search_official_docs(query: str, task_progress: str = "") -> str:
 
 
 @mcp.tool()
-def read_doc_page(full_path: str, task_progress: str = "") -> str:
+def read_doc_page(full_path: str) -> str:
     """Reads a specific documentation file found via search_official_docs."""
     try:
         with open(full_path, "r", encoding="utf-8") as f:
@@ -79,7 +81,7 @@ def read_doc_page(full_path: str, task_progress: str = "") -> str:
 
 
 @mcp.tool()
-def semantic_search(query: str, repo_name: str, n_results: int = 3, task_progress: str = "") -> str:
+def semantic_search(query: str, repo_name: str, n_results: int = 3) -> str:
     """
     Semantic vector search over a repository using natural language.
     Use when searching by concept rather than exact keyword.
@@ -120,7 +122,7 @@ def semantic_search(query: str, repo_name: str, n_results: int = 3, task_progres
 
 
 @mcp.tool()
-def verify_project(repo_name: str, task_progress: str = "") -> str:
+def verify_project(repo_name: str) -> str:
     """
     Auto-detects the project type and runs appropriate verification checks.
     Supports TypeScript, React, React Native, and C++ (CMake/Make).
@@ -135,6 +137,72 @@ def verify_project(repo_name: str, task_progress: str = "") -> str:
         return result.summary()
     except Exception as e:
         return f"Verification error: {e}"
+
+
+@mcp.tool()
+def compact_context() -> str:
+    """Report how much context the proxy is pruning per request for the current task."""
+    try:
+        conn = sqlite3.connect(PROMPT_LOG_DB)
+        row = conn.execute(
+            "SELECT task_id FROM prompts WHERE task_id IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            conn.close()
+            return "No active task found in the prompt log."
+        task_id = row[0]
+
+        rows = conn.execute(
+            "SELECT chars_pruned, prompt_tokens, step_type FROM prompts WHERE task_id = ? ORDER BY id",
+            (task_id,)
+        ).fetchall()
+        summary_count = conn.execute(
+            "SELECT COUNT(*) FROM message_summaries WHERE task_id = ?", (task_id,)
+        ).fetchone()[0]
+        conn.close()
+    except Exception as e:
+        return f"Could not read prompt log: {e}"
+
+    if not rows:
+        return "No steps found for current task."
+
+    total_steps = len(rows)
+    latest_pruned = rows[-1][0] or 0
+    latest_tokens = rows[-1][1] or 0
+    steps_with_pruning = sum(1 for r in rows if (r[0] or 0) > 0)
+
+    if latest_pruned == 0:
+        output = (
+            f"Context pruning report: no pruning active on the most recent request.\n\n"
+            f"Task has {total_steps} step(s). The proxy strips code blocks from messages older "
+            f"than the last 4 — this task may be too short to trigger pruning yet."
+        )
+    else:
+        saved_tokens = latest_pruned // 4
+        orig_chars_est = latest_pruned + (latest_tokens * 4)
+        pct = int(latest_pruned / orig_chars_est * 100) if orig_chars_est else 0
+
+        output = (
+            f"## Context Pruning Report\n\n"
+            f"**Layer 1 — regex pruning:** active — code blocks stripped from messages older than last 4\n"
+            f"**Savings on last request:** ~{latest_pruned:,} chars (~{saved_tokens:,} tokens, {pct}% of context)\n"
+            f"**Steps with pruning active:** {steps_with_pruning} of {total_steps}\n"
+            f"**Layer 2 — LLM summaries:** {summary_count} message(s) summarised for this task\n"
+            f"**Current prompt size:** ~{latest_tokens:,} tokens\n\n"
+            f"Pruning runs automatically on every request — no action needed."
+        )
+
+    try:
+        with sqlite3.connect(PROMPT_LOG_DB) as log_conn:
+            log_conn.execute(
+                """INSERT INTO prompts (timestamp, task_id, step_type, raw_query, response_text, prompt_tokens)
+                   VALUES (?, ?, 'COMPACT', 'compact_context', ?, ?)""",
+                (datetime.now(timezone.utc).isoformat(), task_id, output, latest_tokens),
+            )
+    except Exception:
+        pass
+
+    return output
 
 
 if __name__ == "__main__":

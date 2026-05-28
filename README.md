@@ -50,6 +50,8 @@ The system also exposes its capabilities as MCP (Model Context Protocol) tools, 
 
 Repos are watched for file changes and re-indexed automatically. Per-repo `.chromaignore` files exclude large data files from the index. A prompt monitor provides a full audit trail of every LLM interaction — what was injected, what was sent, what was returned, and token counts per step.
 
+Context compaction runs automatically in two layers. **Layer 1** runs on every request without any LLM call — the proxy strips fenced code blocks and large tool-result bodies from messages older than the last four. **Layer 2** runs in the background when the prompt token count crosses a configurable threshold: the proxy sends old messages one at a time to the LLM for summarisation and swaps the summaries in on subsequent requests. When a HALT (context saturation) fires, the proxy runs a synchronous compaction pass and retries the request once before giving up — so most tasks recover transparently. A `compact_context` MCP tool is available to report current compaction savings on demand.
+
 ---
 
 ## The Test App — StoodleyWeather
