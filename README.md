@@ -3,10 +3,9 @@
 A home LAN or single computer setup for AI-assisted software development using a locally-hosted LLM — no cloud API, no subscription, no data leaving the house.
 
 ```
-Mac mini  →  i7 Ubuntu  →  i9 Ubuntu
-(VS Code)    (proxy, MCP,    (LLM inference)
-              embeddings,
-              monitor)
+Mac mini  →  i7 Ubuntu                          →  i9 Ubuntu
+(VS Code)    (proxy, MCP, embeddings, monitor,     (LLM inference)
+              Ollama/compaction)
 ```
 
 Cline in VS Code sends every prompt through a proxy on the i7. The proxy enriches it with relevant code from ChromaDB before forwarding to the LLM on the i9. The LLM never sees the whole codebase — only the parts that matter for the current task.
@@ -42,7 +41,9 @@ On May 9th 2026 I migrated this setup by port-forwarding the Ubuntu machine  (RT
 
 ### "It's not just about the size of the LLM, it's also so important to get the right infrastructure in place around the LLM"
 
-At its core is a RAG (Retrieval-Augmented Generation) pipeline — source code from all active repos is chunked and embedded into 1024-dimensional vectors, then persisted in ChromaDB, a local vector database. At query time ChromaDB performs approximate nearest-neighbour search to find semantically similar chunks, which are combined with BM25 keyword results and fused through Reciprocal Rank Fusion. This candidate pool is then passed through a cross-encoder reranker which scores each chunk against the actual query as a pair — producing a much more precise final selection than vector similarity alone.
+At its core is a RAG (Retrieval-Augmented Generation) pipeline — source code from all active repos is chunked and embedded into 1024-dimensional vectors using **Qwen3-Embedding-0.6B** (instruction-following embedding model), then persisted in ChromaDB. At query time ChromaDB performs approximate nearest-neighbour search to find semantically similar chunks, which are combined with BM25 keyword results and fused through Reciprocal Rank Fusion. This candidate pool is then passed through a cross-encoder reranker (ms-marco-MiniLM-L-6-v2) which scores each chunk against the actual query as a pair — producing a much more precise final selection than vector similarity alone.
+
+Retrieval is further biased toward files actively being worked on: as the task progresses, files that have been read or written have their RRF scores boosted before reranking, keeping injected context focused on the code under active development. The codebase skeleton map is also dynamically reordered each step — active files and their import neighbours appear at the top.
 
 The enriched context is injected into every prompt sent to the LLM, meaning Cline receives highly accurate codebase context without you having to manually reference files.
 
@@ -50,7 +51,7 @@ The system also exposes its capabilities as MCP (Model Context Protocol) tools, 
 
 Repos are watched for file changes and re-indexed automatically. Per-repo `.chromaignore` files exclude large data files from the index. A prompt monitor provides a full audit trail of every LLM interaction — what was injected, what was sent, what was returned, and token counts per step.
 
-Context compaction runs automatically in two layers. **Layer 1** runs on every request without any LLM call — the proxy strips fenced code blocks and large tool-result bodies from messages older than the last four. **Layer 2** runs in the background when the prompt token count crosses a configurable threshold: the proxy sends old messages one at a time to the LLM for summarisation and swaps the summaries in on subsequent requests. When a HALT (context saturation) fires, the proxy runs a synchronous compaction pass and retries the request once before giving up — so most tasks recover transparently. A `compact_context` MCP tool is available to report current compaction savings on demand.
+Context compaction runs automatically in two layers. **Layer 1** runs on every request without any LLM call — the proxy strips fenced code blocks and large tool-result bodies from messages older than the last four. **Layer 2** runs in the background when the prompt token count crosses a configurable threshold: the proxy sends old messages one at a time to the **local Qwen2.5:3b model via Ollama** (on the i7) for summarisation and swaps the summaries in on subsequent requests — keeping compaction independent of the i9. When a HALT (context saturation) fires, the proxy runs a synchronous compaction pass and retries the request once before giving up — so most tasks recover transparently. A `compact_context` MCP tool is available to report current compaction savings on demand.
 
 ---
 

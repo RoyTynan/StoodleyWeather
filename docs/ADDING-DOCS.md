@@ -111,7 +111,7 @@ This creates the ChromaDB collection `docs_typescript`. On first run it will emb
 
 ```python
 @mcp.tool()
-def search_typescript_docs(query: str, n_results: int = 8, repo_name: str = "", task_progress: str = "") -> str:
+def search_typescript_docs(query: str, n_results: int = 8, repo_name: str = "") -> str:
     """Semantic search over TypeScript documentation and handbook.
     Find type system features, compiler options and language reference."""
     return _search("docs_typescript", query, n_results,
@@ -173,7 +173,7 @@ This creates the ChromaDB collection `docs_nextjs`.
 
 ```python
 @mcp.tool()
-def search_nextjs_docs(query: str, n_results: int = 8, repo_name: str = "", task_progress: str = "") -> str:
+def search_nextjs_docs(query: str, n_results: int = 8, repo_name: str = "") -> str:
     """Semantic search over Next.js documentation.
     Find routing, data fetching, rendering, API routes and configuration by describing what you need."""
     return _search("docs_nextjs", query, n_results,

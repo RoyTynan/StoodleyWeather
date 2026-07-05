@@ -48,7 +48,7 @@ Rather than summarising the whole conversation (which causes saturation), it sum
 
 1. After an LLM response is received and logged, a background thread checks whether `prompt_tokens` has crossed the trigger threshold
 2. If yes, it walks the old messages (older than `PRUNE_KEEP_LAST_N`) looking for messages above `COMPACT_MIN_CHARS` that do not yet have a stored summary
-3. For each qualifying message it sends just that message to the LLM with a short compression instruction: *"Summarise this in 2–3 sentences, preserving any file names, function names, and error messages."*
+3. For each qualifying message it sends just that message to the **local Ollama LLM** (Qwen2.5:3b on the i7, port 11434) with a short compression instruction: *"Summarise this in 2–3 sentences, preserving any file names, function names, and error messages."* Using the local model keeps compaction independent of the i9 and frees the heavier model for actual coding tasks.
 4. The summary is written to a new `summary` column in the `prompts` table, linked by message position and task ID
 5. On the next proxy request, messages that have a stored summary have their content replaced with the summary before the array is forwarded to the LLM
 
@@ -70,6 +70,8 @@ All tuning values live in `config.py` under the `CONTEXT COMPACTION` section:
 | `COMPACT_ENABLED` | `True` | Master switch for Layer 2 LLM compaction. Layer 1 regex pruning always runs regardless. |
 | `COMPACT_TRIGGER_TOKENS` | `20000` | Prompt token count that triggers a background LLM compaction pass. |
 | `COMPACT_MIN_CHARS` | `500` | Minimum message length to be worth summarising. Short messages are left verbatim. |
+| `COMPACT_LLM_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible endpoint for the local compaction LLM (Ollama on the i7). |
+| `COMPACT_LLM_MODEL` | `qwen2.5:3b` | Model name passed to the compaction LLM. |
 
 ---
 

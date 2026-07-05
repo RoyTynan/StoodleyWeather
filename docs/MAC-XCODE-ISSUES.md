@@ -24,7 +24,7 @@ VS Code / Cline (Mac)
   proxy.py :8000          ← enriches prompts with RAG context
         ↓
   ChromaDB (local)        ← vector + BM25 index of v4visuals
-  Ollama :11434           ← bge-m3 embeddings (Metal, unified memory)
+  Ollama :11434           ← Qwen3-Embedding-0.6B embeddings (Metal, unified memory)
         ↓
   i9 llama-server :8080   ← Qwen2.5-Coder-32B-Instruct Q8_0 (LLM inference)
 ```
@@ -52,7 +52,7 @@ This means:
 
 ### Why not index on the Mac?
 
-- The i7 runs the embedding server (`bge-m3` via llama.cpp) at full speed on the RTX 2060 — faster than Mac Metal for this workload
+- The i7 runs the embedding server (`Qwen3-Embedding-0.6B` via llama.cpp) at full speed on the RTX 2060 — faster than Mac Metal for this workload
 - It keeps the Mac free of indexing load during development
 - The i7's MCP tools and proxy are already configured and battle-tested
 
@@ -111,11 +111,11 @@ After copying, edit `config.py` for the Mac environment — see the section belo
 | `CHROMA_DIR` | `/Users/yourname/dev/mcp-tools/chromadb_data` |
 | `DOCS_ROOT` | `/Users/yourname/dev/mcp-tools/docs` |
 | `TOOLS_DIR` | `/Users/yourname/dev/mcp-tools` |
-| `EMBED_URL` | `http://127.0.0.1:11434/api/embeddings` (Ollama, not llama-embed) |
+| `EMBED_URL` | `http://127.0.0.1:11434/v1/embeddings` (Ollama OpenAI-compatible endpoint) |
 | `INDEXABLE_EXTENSIONS` | Remove `.py`, `.cpp`, `.h`, `.c` if not needed |
 | `EXCLUDED_DIRS` | Add `"ios"`, `"android"`, `"Pods"`, `".expo"` |
 
-Remove the `EMBED_QUERY_PREFIX` and `EMBED_PASSAGE_PREFIX` lines — Ollama does not use bge-m3 prefixes.
+Set `EMBED_QUERY_PREFIX` to the Qwen3-Embedding instruction prefix: `"Instruct: Given a search query, retrieve relevant code and documentation passages.\nQuery: "` and `EMBED_PASSAGE_PREFIX` to `""`.
 
 ### config.py — DOCS_SOURCES
 
@@ -146,12 +146,12 @@ brew services start ollama   # start
 brew services stop ollama    # stop
 ```
 
-Model: `bge-m3` loaded from local GGUF:
+Model: `Qwen3-Embedding-0.6B` loaded from local GGUF:
 ```
-~/dev/mcp-tools/models/bge-m3-Q8_0.gguf
+~/dev/mcp-tools/models/Qwen3-Embedding-0.6B-Q8_0.gguf
 ```
 
-Registered via Modelfile — no internet download required.
+Registered via Modelfile — no internet download required. Use `--pooling last` when loading via llama-server; Ollama handles pooling internally.
 
 ---
 

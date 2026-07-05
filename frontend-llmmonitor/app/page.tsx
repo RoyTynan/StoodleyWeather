@@ -24,6 +24,13 @@ function stepStyle(type: string | null) {
   return STEP_STYLE[type ?? ''] ?? STEP_STYLE.TOOL;
 }
 
+const CONTEXT_BADGES: { key: string; label: string; badge: string; desc: string }[] = [
+  { key: 'skel',   label: 'skel',      badge: 'bg-purple-950 text-purple-300 border-purple-800', desc: 'Skeleton map injected — one line per file listing exported symbols, giving the LLM the full codebase structure upfront.' },
+  { key: 'chunks', label: 'chunks',    badge: 'bg-green-950 text-green-300 border-green-800',   desc: 'Code chunks injected — semantically relevant source snippets from ChromaDB, selected via hybrid vector + BM25 search and cross-encoder reranking.' },
+  { key: 'verify', label: 'verify',    badge: 'bg-yellow-950 text-yellow-300 border-yellow-800', desc: 'Verify result injected — tsc / ESLint output from the previous file write, so the LLM knows whether its edit compiled cleanly.' },
+  { key: 'active', label: 'active:N',  badge: 'bg-orange-950 text-orange-300 border-orange-800', desc: 'Active file bias — N recently read/written files promoted in the skeleton map and given a retrieval score boost, so context stays focused on the files under active work.' },
+];
+
 const STEP_DESC: Record<string, string> = {
   TASK:     'Opening prompt — the user\'s typed task. Starts a new task group and assigns a task ID.',
   READ:     'Cline read a file via read_repo_file. Enrichment is skipped; Cline reads the file directly from the MCP server.',
@@ -56,6 +63,11 @@ function ContextBadges({ step }: { step: TaskStep }) {
       {!!step.skeleton_injected && <span className="bg-purple-950 text-purple-300 border border-purple-800 px-1 py-0.5 rounded text-base">skel</span>}
       {!!step.chunks_injected   && <span className="bg-green-950 text-green-300 border border-green-800 px-1 py-0.5 rounded text-base">chunks</span>}
       {!!step.verify_injected   && <span className="bg-yellow-950 text-yellow-300 border border-yellow-800 px-1 py-0.5 rounded text-base">verify</span>}
+      {(step.active_files_count ?? 0) > 0 && (
+        <span className="bg-orange-950 text-orange-300 border border-orange-800 px-1 py-0.5 rounded text-base" title={`${step.active_files_count} recently-touched file(s) biasing retrieval and skeleton`}>
+          active:{step.active_files_count}
+        </span>
+      )}
     </div>
   );
 }
@@ -267,6 +279,7 @@ export default function HomePage() {
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [activeLegend, setActiveLegend] = useState<string | null>(null);
+  const [activeContextBadge, setActiveContextBadge] = useState<string | null>(null);
   const [config, setConfig] = useState<{ timestamp: string; config: Record<string, string | number> } | null>(null);
   const fetchTasks = async (p = page) => {
     const res = await fetch(`/api/tasks?limit=${PAGE_SIZE}&offset=${p * PAGE_SIZE}`);
@@ -351,12 +364,12 @@ export default function HomePage() {
       )}
 
       {/* Step type legend */}
-      <div className="mb-4">
+      <div className="mb-2">
         <div className="flex flex-wrap gap-2">
           {Object.entries(STEP_STYLE).map(([type, s]) => (
             <button
               key={type}
-              onClick={() => setActiveLegend(activeLegend === type ? null : type)}
+              onClick={() => { setActiveLegend(activeLegend === type ? null : type); setActiveContextBadge(null); }}
               className={`px-1.5 py-0.5 rounded text-base font-mono border transition-opacity ${s.badge} ${activeLegend && activeLegend !== type ? 'opacity-40' : 'opacity-100'}`}
             >
               {type}
@@ -369,6 +382,30 @@ export default function HomePage() {
             <span className="opacity-80">{STEP_DESC[activeLegend]}</span>
           </div>
         )}
+      </div>
+
+      {/* Context badge legend */}
+      <div className="mb-4">
+        <div className="flex flex-wrap gap-2">
+          {CONTEXT_BADGES.map(b => (
+            <button
+              key={b.key}
+              onClick={() => { setActiveContextBadge(activeContextBadge === b.key ? null : b.key); setActiveLegend(null); }}
+              className={`px-1 py-0.5 rounded text-base font-mono border transition-opacity ${b.badge} ${activeContextBadge && activeContextBadge !== b.key ? 'opacity-40' : 'opacity-100'}`}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+        {activeContextBadge && (() => {
+          const b = CONTEXT_BADGES.find(x => x.key === activeContextBadge)!;
+          return (
+            <div className={`mt-2 px-3 py-2 rounded border text-base ${b.badge}`}>
+              <span className="font-semibold font-mono mr-2">{b.label}</span>
+              <span className="opacity-80">{b.desc}</span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Task list */}

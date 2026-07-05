@@ -96,8 +96,8 @@ Choose the quantisation that fits your VRAM — see [GPU-MODELS.md](GPU-MODELS.m
 python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='BAAI/bge-m3-GGUF',
-    filename='bge-m3-Q8_0.gguf',
+    repo_id='Qwen/Qwen3-Embedding-0.6B-GGUF',
+    filename='Qwen3-Embedding-0.6B-Q8_0.gguf',
     local_dir='$HOME/models/'
 )"
 ```
@@ -150,20 +150,21 @@ Create `/etc/systemd/system/llama-embed.service`:
 
 ```ini
 [Unit]
-Description=llama.cpp embedding server (bge-m3)
+Description=llama.cpp embedding server (Qwen3-Embedding-0.6B)
 After=network.target
 
 [Service]
 Type=simple
 User=yourusername
 ExecStart=/home/yourusername/llama.cpp/build/bin/llama-server \
-  --model /home/yourusername/models/bge-m3-Q8_0.gguf \
+  --model /home/yourusername/models/Qwen3-Embedding-0.6B-Q8_0.gguf \
   --port 11435 \
   --host 127.0.0.1 \
   --ctx-size 8192 \
   --batch-size 2048 \
+  --ubatch-size 2048 \
   --embedding \
-  --pooling mean \
+  --pooling last \
   --gpu-layers 99 \
   --log-disable
 Restart=on-failure

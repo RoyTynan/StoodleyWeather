@@ -53,6 +53,7 @@ export type TaskStep = {
   msg_size: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  active_files_count: number | null;
 };
 
 export type TaskGroup = {
@@ -70,7 +71,7 @@ export type TaskGroup = {
 const STEP_SELECT = `
   SELECT id, timestamp, repo, raw_query, step_type, user_task, task_id,
          skeleton_injected, chunks_injected, verify_injected, finish_reason,
-         latency_ms, model, prompt_tokens, completion_tokens,
+         latency_ms, model, prompt_tokens, completion_tokens, active_files_count,
          length(full_messages) as msg_size
   FROM prompts
 `;

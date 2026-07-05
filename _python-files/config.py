@@ -25,18 +25,23 @@ TOOLS_DIR = "/mnt/storage/mcp-tools"
 # SERVERS
 # ===========================================================
 
-# Embedding server — runs on the i7 via llama-embed.service (bge-m3-Q8_0)
+# Embedding server — runs on the i7 via llama-embed.service (Qwen3-Embedding-0.6B)
 EMBED_URL = "http://127.0.0.1:11435/v1/embeddings"
-EMBED_QUERY_PREFIX = "query: "      # bge-m3 query prefix
-EMBED_PASSAGE_PREFIX = "passage: "  # bge-m3 document prefix
+EMBED_QUERY_PREFIX = "Instruct: Given a search query, retrieve relevant code and documentation passages.\nQuery: "
+EMBED_PASSAGE_PREFIX = ""  # Qwen3-Embedding: no passage prefix needed
 
-# LLM inference server — runs on the i9 (used by proxy.py only)
+# LLM inference server — runs on the i9 (used by proxy.py for Cline responses)
 LLM_URL = "http://192.168.178.99:8080"
 
 # Set to True for models that output <think>...</think> blocks (Qwen3, DeepSeek-R1).
 # The proxy strips think blocks before returning to Cline and disables them at the
 # model level via enable_thinking=False in the request body.
 LLM_HAS_THINKING = True
+
+# Local LLM on the i7 via Ollama — used for background AUTOCOMP summarisation.
+# Keeps compaction independent of the i9 and uses a lighter model for the task.
+COMPACT_LLM_URL = "http://127.0.0.1:11434/v1"
+COMPACT_LLM_MODEL = "qwen2.5:3b"
 
 # ===========================================================
 # PROXY (proxy.py)
@@ -48,6 +53,12 @@ N_CONTEXT_CHUNKS = 5
 # Maximum number of files to include in the skeleton codebase map
 # Keeps the preamble compact on larger repos
 SKELETON_MAX_FILES = 60
+
+# Maximum number of recently-touched files to track per task for retrieval bias
+ACTIVE_FILE_MAX = 10
+
+# RRF score multiplier applied to chunks from recently-touched files
+ACTIVE_FILE_BOOST = 1.5
 
 # Path to the SQLite prompt log used by proxy.py and server.py
 PROMPT_LOG_DB = "/mnt/storage/prompt_log.db"

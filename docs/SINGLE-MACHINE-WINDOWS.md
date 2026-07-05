@@ -105,8 +105,8 @@ curl -L -H "Authorization: Bearer your-huggingface-token" `
 python -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='BAAI/bge-m3-GGUF',
-    filename='bge-m3-Q8_0.gguf',
+    repo_id='Qwen/Qwen3-Embedding-0.6B-GGUF',
+    filename='Qwen3-Embedding-0.6B-Q8_0.gguf',
     local_dir='C:/models/'
 )"
 ```
@@ -148,7 +148,7 @@ Create `C:\llama\start-embed.bat`:
 ```bat
 @echo off
 set SERVER_BIN=C:\llama.cpp\build\bin\Release\llama-server.exe
-set MODEL_PATH=C:\models\bge-m3-Q8_0.gguf
+set MODEL_PATH=C:\models\Qwen3-Embedding-0.6B-Q8_0.gguf
 
 %SERVER_BIN% ^
   --model %MODEL_PATH% ^
@@ -156,8 +156,9 @@ set MODEL_PATH=C:\models\bge-m3-Q8_0.gguf
   --host 127.0.0.1 ^
   --ctx-size 8192 ^
   --batch-size 2048 ^
+  --ubatch-size 2048 ^
   --embedding ^
-  --pooling mean ^
+  --pooling last ^
   --gpu-layers 99 ^
   --log-disable
 ```

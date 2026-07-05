@@ -34,6 +34,11 @@ Alongside this, Cline connects directly to two MCP servers on the i7:
 - **context-engine** (`server.py`) — repo file access, semantic search, verify
 - **docs-engine** (`docs_server.py`) — framework documentation search
 
+Three inference services run on the i7:
+- **llama-embed** (port 11435) — Qwen3-Embedding-0.6B for vector embeddings
+- **Ollama** (port 11434) — Qwen2.5:3b for background AUTOCOMP summarisation
+- **cross-encoder reranker** — ms-marco-MiniLM-L-6-v2, CPU-only, loaded lazily by `rerank.py`
+
 ---
 
 ## Proxy — Context Enrichment
@@ -57,12 +62,14 @@ Alongside this, Cline connects directly to two MCP servers on the i7:
 
 Two retrieval methods run in parallel and are merged using **Reciprocal Rank Fusion (RRF)**:
 
-- **Vector search** — embeds the prompt using bge-m3 and queries ChromaDB for semantically similar chunks
+- **Vector search** — embeds the prompt using Qwen3-Embedding and queries ChromaDB for semantically similar chunks
 - **BM25 keyword search** — scores all chunks in an in-memory BM25 index (built at proxy startup) using TF-IDF-style keyword matching
 
 RRF combines the two ranked lists into a single ranking without normalising scores — chunks that rank well in both searches score highest. The top candidates are passed to the **cross-encoder reranker** (ms-marco-MiniLM-L-6-v2) which scores each chunk against the query as a pair, giving a more precise final selection than vector similarity alone.
 
-The top `N_CONTEXT_CHUNKS` results are injected into the prompt.
+**Active file bias** — after RRF scoring, chunks from files that have been read or written in the current task have their score multiplied by `ACTIVE_FILE_BOOST` (default 1.5) before the final sort and rerank pass. This keeps retrieved context focused on the files under active work as the task progresses. The boost is pre-rerank, so the cross-encoder still has final say on relevance.
+
+The top `N_CONTEXT_CHUNKS` results are injected into the prompt. The `active:N` badge in the monitor shows how many active files influenced retrieval on each step.
 
 ### Skeleton Injection
 
@@ -74,6 +81,8 @@ src/lib/weather-utils.ts → formatTemperature, windChill, celsiusToFahrenheit
 ```
 
 This gives the LLM the full codebase structure upfront cheaply, without reading every file. It is injected before the code chunks on every enriched request.
+
+**Dynamic reordering** — on each request the skeleton is reordered into three tiers before injection: (1) files read or written in the current task, (2) their first-degree import neighbours from `dep_graph.db`, (3) everything else. All tiers are capped at `SKELETON_MAX_FILES` lines combined. This puts the most relevant files at the top where the model's attention is strongest, without changing the token budget.
 
 ### Response Buffering and Plain-Text Wrapping
 
@@ -287,15 +296,18 @@ visual-test-data/
 
 ---
 
-## Embeddings — bge-m3
+## Embeddings — Qwen3-Embedding-0.6B
 
-`bge-m3-Q8_0` runs as a systemd service (`llama-embed`) on the i7's RTX 2060 (port 11435). It produces 1024-dimensional embeddings.
+`Qwen3-Embedding-0.6B` runs as a systemd service (`llama-embed`) on the i7's RTX 2060 (port 11435). It produces 1024-dimensional embeddings.
 
-bge-m3 requires prefixes:
-- `query: ` — prepended to prompts before embedding at query time
-- `passage: ` — prepended to document chunks before embedding at index time
+Unlike bge-m3, Qwen3-Embedding is an instruction-following model. The query prefix is a task instruction rather than a fixed token:
+
+- **Query:** `Instruct: Given a search query, retrieve relevant code and documentation passages.\nQuery: ` — prepended at retrieval time
+- **Passage:** no prefix — documents are embedded as-is at index time
 
 Used by `index_repos.py`, `index_docs.py`, and `proxy.py`.
+
+**Note:** ChromaDB collections must be re-indexed when switching embedding models — embeddings from different models are not compatible.
 
 ---
 

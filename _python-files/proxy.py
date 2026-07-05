@@ -35,13 +35,13 @@ from config import (
     DEP_GRAPH_ENABLED, DEP_GRAPH_DB, MAX_IMPACT_FILES,
     LLM_HAS_THINKING,
     PRUNE_KEEP_LAST_N, COMPACT_ENABLED, COMPACT_TRIGGER_TOKENS, COMPACT_MIN_CHARS,
+    ACTIVE_FILE_MAX, ACTIVE_FILE_BOOST, PROMPT_LOG_DB,
+    COMPACT_LLM_URL, COMPACT_LLM_MODEL,
 )
 from rerank import rerank
 from verify import verify
 
 from contextlib import asynccontextmanager
-
-PROMPT_LOG_DB = "/mnt/storage/prompt_log.db"
 
 _db_conn: sqlite3.Connection | None = None
 _db_lock = threading.Lock()
@@ -72,7 +72,7 @@ def _init_db():
         ("response_text", "TEXT"), ("latency_ms", "INTEGER"), ("model", "TEXT"),
         ("task_id", "TEXT"), ("step_type", "TEXT"), ("user_task", "TEXT"),
         ("prompt_tokens", "INTEGER"), ("completion_tokens", "INTEGER"),
-        ("chars_pruned", "INTEGER"),
+        ("chars_pruned", "INTEGER"), ("active_files_count", "INTEGER"),
     ]:
         if col not in existing:
             _db_conn.execute(f"ALTER TABLE prompts ADD COLUMN {col} {definition}")
@@ -217,8 +217,9 @@ def _summarise_old_messages(task_id: str, messages: list):
             continue
         try:
             resp = _http_client.post(
-                f"{LLM_URL}/v1/chat/completions",
+                f"{COMPACT_LLM_URL}/chat/completions",
                 json={
+                    "model": COMPACT_LLM_MODEL,
                     "messages": [{"role": "user", "content": (
                         "Summarise the following in 2-3 sentences. "
                         "Preserve any file names, function names, and error messages.\n\n"
@@ -226,14 +227,12 @@ def _summarise_old_messages(task_id: str, messages: list):
                     )}],
                     "max_tokens": 150,
                     "stream": False,
-                    "enable_thinking": False,
                 },
                 timeout=30.0,
             )
             resp.raise_for_status()
             summary = resp.json()["choices"][0]["message"]["content"].strip()
-            if LLM_HAS_THINKING:
-                summary = _THINK_RE.sub("", summary).strip()
+            summary = _THINK_RE.sub("", summary).strip()
             if not summary:
                 continue
             _summary_cache[h] = summary
@@ -327,8 +326,8 @@ def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> i
             """INSERT INTO prompts
                (timestamp, repo, raw_query, enriched_message, full_messages,
                 skeleton_injected, chunks_injected, verify_injected, finish_reason,
-                task_id, step_type, user_task, chars_pruned)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                task_id, step_type, user_task, chars_pruned, active_files_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now(timezone.utc).isoformat(),
                 meta.get("repo"),
@@ -343,6 +342,7 @@ def _log_prompt(meta: dict, full_messages: list, finish_reason: str | None) -> i
                 meta.get("step_type"),
                 meta.get("user_task"),
                 meta.get("chars_pruned", 0),
+                meta.get("active_files_count", 0),
             ),
         )
         _db_conn.commit()
@@ -577,6 +577,27 @@ _WRITE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Extracts the file path from a read_file tool result message
+_READ_PATH_RE = re.compile(
+    r'\[read_file\s+for\s+[\'"]([^\'"]+)[\'"]',
+    re.IGNORECASE,
+)
+
+# Per-task registry of recently read/written files — used to bias retrieval and skeleton ordering
+_task_active_files: dict[str, list[str]] = {}
+
+
+def _register_active_file(task_id: str | None, file_path: str):
+    """Record a file as recently accessed for the given task."""
+    if not task_id or not file_path:
+        return
+    files = _task_active_files.setdefault(task_id, [])
+    if file_path in files:
+        files.remove(file_path)  # move to end (most recent)
+    files.append(file_path)
+    if len(files) > ACTIVE_FILE_MAX:
+        _task_active_files[task_id] = files[-ACTIVE_FILE_MAX:]
+
 
 def _get_impact(repo_name: str, edited_file: str) -> str | None:
     """Query dep_graph.db for files that import edited_file. Returns a formatted note or None."""
@@ -745,6 +766,51 @@ def build_skeleton(repo_name: str):
     print(f"[skeleton] built for {repo_name} ({len(lines)} files)")
 
 
+def _dynamic_skeleton(repo_name: str, active_files: list[str]) -> str | None:
+    """Return skeleton with active files and their import neighbours promoted to the top."""
+    with _skeleton_lock:
+        skeleton = _repo_skeletons.get(repo_name)
+    if not skeleton:
+        return None
+    if not active_files:
+        return skeleton
+
+    lines = skeleton.splitlines()
+    active_set = set(active_files)
+
+    # Pull first-degree import neighbours from dep_graph
+    neighbour_set: set[str] = set()
+    if DEP_GRAPH_ENABLED:
+        try:
+            conn = sqlite3.connect(DEP_GRAPH_DB, check_same_thread=False)
+            for f in active_files:
+                rows = conn.execute(
+                    "SELECT imports_file FROM edges WHERE repo = ? AND file = ? "
+                    "UNION SELECT file FROM edges WHERE repo = ? AND imports_file = ?",
+                    (repo_name, f, repo_name, f),
+                ).fetchall()
+                neighbour_set.update(r[0] for r in rows)
+            conn.close()
+        except Exception:
+            pass
+    neighbour_set -= active_set
+
+    tier1, tier2, tier3 = [], [], []
+    for line in lines:
+        file_path = line.split(" → ")[0].strip()
+        if file_path in active_set:
+            tier1.append(line)
+        elif file_path in neighbour_set:
+            tier2.append(line)
+        else:
+            tier3.append(line)
+
+    reordered = tier1 + tier2 + tier3
+    if tier1:
+        print(f"[skeleton] dynamic reorder: {len(tier1)} active, {len(tier2)} neighbours, {len(tier3)} rest")
+    return "\n".join(reordered[:SKELETON_MAX_FILES])
+
+
 def trigger_reindex(repo_name: str):
     """Run index_repos.py for the given repo, then rebuild the BM25 index."""
     print(f"[watcher] re-indexing {repo_name}...")
@@ -835,7 +901,7 @@ def detect_repo(messages: list) -> str | None:
     return None
 
 
-def hybrid_search(query: str, repo_name: str) -> str:
+def hybrid_search(query: str, repo_name: str, active_files: list[str] | None = None) -> str:
     """Hybrid search combining ChromaDB vector search and BM25 keyword search via RRF."""
 
     # --- Vector search — semantic similarity ---
@@ -875,6 +941,13 @@ def hybrid_search(query: str, repo_name: str) -> str:
         key = (meta["file_path"], meta["start_line"])
         rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
         chunk_map[key] = (doc, meta)
+
+    # Boost RRF scores for chunks from recently-touched files
+    if active_files:
+        active_set = set(active_files)
+        for key in rrf_scores:
+            if chunk_map[key][1]["file_path"] in active_set:
+                rrf_scores[key] *= ACTIVE_FILE_BOOST
 
     all_keys = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
     all_chunks = [(chunk_map[k][0], chunk_map[k][1]) for k in all_keys]
@@ -934,17 +1007,23 @@ def enrich_messages(messages: list) -> tuple[list, dict]:
 
     if user_content.lstrip().startswith("["):
         repo_name = detect_repo(messages)
+        # Register read/write paths in the active-file registry
+        read_match = _READ_PATH_RE.search(user_content)
+        if read_match:
+            _register_active_file(task_id, read_match.group(1))
         if repo_name and _FILE_WRITE_PATTERN.search(user_content):
             _schedule_verify(repo_name)
             print(f"[proxy] file write detected — verification scheduled for {repo_name}")
-            if DEP_GRAPH_ENABLED and task_id:
+            if task_id:
                 path_match = _WRITE_PATH_RE.search(user_content)
                 if path_match:
                     edited_file = path_match.group(1)
-                    impact = _get_impact(repo_name, edited_file)
-                    if impact:
-                        _pending_impact[task_id] = impact
-                        print(f"[dep_graph] impact queued for {edited_file}")
+                    _register_active_file(task_id, edited_file)
+                    if DEP_GRAPH_ENABLED:
+                        impact = _get_impact(repo_name, edited_file)
+                        if impact:
+                            _pending_impact[task_id] = impact
+                            print(f"[dep_graph] impact queued for {edited_file}")
         else:
             print("[proxy] skipping enrichment — Cline internal message")
         meta["enriched_message"] = user_content
@@ -964,10 +1043,10 @@ def enrich_messages(messages: list) -> tuple[list, dict]:
 
     meta["repo"] = repo_name
 
-    chunks = hybrid_search(user_content, repo_name)
-
-    with _skeleton_lock:
-        skeleton = _repo_skeletons.get(repo_name)
+    active = _task_active_files.get(task_id, []) if task_id else []
+    meta["active_files_count"] = len(active)
+    chunks = hybrid_search(user_content, repo_name, active_files=active)
+    skeleton = _dynamic_skeleton(repo_name, active)
 
     pending_verify = _pending_verify.pop(repo_name, None)
     pending_impact = _pending_impact.pop(task_id, None) if task_id else None
